@@ -1,0 +1,3 @@
+# Core server and synthetic tests; Jetson camera packages are installed by the OS.
+Pillow>=10.4,<13
+numpy>=1.26,<3

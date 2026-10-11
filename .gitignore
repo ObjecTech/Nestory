@@ -1,0 +1,48 @@
+# Python and environments
+__pycache__/
+*.py[cod]
+.venv*/
+venv/
+.env
+.env.*
+*.env
+!.env.example
+# Runtime data; synthetic examples are stored separately
+media/
+data/
+dataset/
+datasets/
+records/
+captures/
+trash/
+_trash/
+training_data/
+training/
+*.db
+*.db-*
+*.sqlite*
+# Weights and serialized models
+models/
+weights/
+checkpoints/
+*.pth
+*.pt
+*.onnx
+*.bin
+*.ckpt
+*.safetensors
+*.pkl
+*.pickle
+# Logs and caches
+logs/
+*.log
+runs/
+outputs/
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+# Local tooling
+.idea/
+.vscode/
+.DS_Store
