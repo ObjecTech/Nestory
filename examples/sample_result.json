@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "model": "example-only",
+  "observation": {
+    "baby_visible": false,
+    "visibility": "not_visible",
+    "sleep_state": "unknown",
+    "posture": "unknown",
+    "expression": "unknown",
+    "activity_level": "unknown",
+    "confidence": 0.0,
+    "visibility_confidence": 1.0,
+    "description": "Synthetic empty scene; this is not a model prediction."
+  }
+}
