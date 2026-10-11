@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f2ec">
+  <meta name="bmon-access-mode" content="local">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Edge AI Monitor</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/app.css?v=6">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow" id="accessEyebrow">EDGE AI RESEARCH MONITOR</p>
+        <h1>Edge AI Monitor</h1>
+      </div>
+      <div class="connection-pill" id="connectionPill"><i></i><span>正在连接</span></div>
+    </header>
+
+    <p id="personTestBanner" class="notice-card" hidden>TEST MODE · 成人测试：当前观察画面中的人，结果仅用于工程验证。</p>
+    <main>
+      <section class="page active" data-page="monitor">
+        <article class="hero-state" id="heroState">
+          <div class="hero-photo" id="heroPhoto"></div>
+          <div class="hero-gradient"></div>
+          <div class="hero-copy">
+            <span class="status-chip" id="activityChip">正在检测</span>
+            <h2 id="activityTitle">等待摄像头画面</h2>
+            <p id="activityDuration">—</p>
+          </div>
+        </article>
+
+        <article class="camera-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">实时画面</span>
+              <strong id="cameraResolution">1280×720</strong>
+            </div>
+            <span class="live-badge" id="cameraLiveBadge"><i></i><span>LIVE</span></span>
+          </div>
+          <div class="camera-frame">
+            <img id="cameraStream" src="/snapshot.jpg" alt="Edge AI Monitor实时画面">
+            <div class="camera-offline" id="cameraOffline" hidden>
+              <span>摄像头暂时不可用</span>
+              <small id="cameraError"></small>
+            </div>
+          </div>
+        </article>
+
+        <div class="status-grid">
+          <article class="metric-card">
+            <span>睡眠姿势</span>
+            <strong id="postureTitle">检测中</strong>
+            <small id="postureDuration">—</small>
+          </article>
+          <article class="metric-card">
+            <span>本地 AI</span>
+            <strong id="modelTitle">等待启动</strong>
+            <small id="modelDetail">EmotiEffLib + 时间状态机</small>
+          </article>
+        </div>
+
+        <button class="alert-button" id="enableAlertButton">
+          <span class="alert-icon">♬</span>
+          <span><strong>启用睡醒提醒</strong><small>页面打开时响铃并震动</small></span>
+          <b>启用</b>
+        </button>
+
+        <details class="debug-panel">
+          <summary>手动校正 / 调试</summary>
+          <p>AI 尚未启动或判断错误时，可以手动设置；校正画面会作为后续个体化模型的训练样本。</p>
+          <div class="debug-label">当前状态</div>
+          <div class="button-row" id="activityButtons">
+            <button data-category="activity" data-value="sleeping">睡觉</button>
+            <button data-category="activity" data-value="awake">清醒</button>
+          </div>
+          <div class="debug-label">睡眠姿势</div>
+          <div class="button-row" id="postureButtons">
+            <button data-category="posture" data-value="supine">仰睡</button>
+            <button data-category="posture" data-value="side">侧睡</button>
+            <button data-category="posture" data-value="prone">趴睡</button>
+          </div>
+          <button class="save-photo-button" id="savePhotoButton">保存照片</button>
+        </details>
+      </section>
+
+      <section class="page" data-page="play">
+        <div class="page-title-row play-title-row">
+          <div><p class="eyebrow">PLAY WITH ME</p><h2>陪我玩</h2></div>
+          <span class="speaker-pill" id="speakerPill"><i></i><span>音响待机</span></span>
+        </div>
+        <p class="page-intro">选择一个类目后随机播放，一轮内不会重复。声音通过配置的音频输出播放。</p>
+
+        <div class="play-category-grid" id="playCategoryGrid">
+          <div class="play-category-loading">正在读取媒体存储中的音乐…</div>
+        </div>
+
+        <article class="now-playing-card" id="nowPlayingCard">
+          <div class="record-art" id="recordArt"><span>♫</span></div>
+          <div class="now-playing-copy">
+            <span id="playerCategory">尚未选择类目</span>
+            <strong id="playerTitle">选一个喜欢的类目吧</strong>
+            <small id="playerDetail">请配置音频输出设备</small>
+          </div>
+        </article>
+
+        <div class="player-progress-card">
+          <input id="playerProgress" type="range" min="0" max="1" step="1" value="0" aria-label="播放进度" disabled>
+          <div><span id="playerCurrentTime">0:00</span><span id="playerDuration">0:00</span></div>
+        </div>
+
+        <div class="player-controls" aria-label="播放控制">
+          <button type="button" data-player-action="previous" aria-label="上一首">↶<small>上一首</small></button>
+          <button type="button" class="primary-player-control" id="playPauseButton" data-player-action="pause" aria-label="暂停">Ⅱ<small>暂停</small></button>
+          <button type="button" data-player-action="next" aria-label="下一首">↷<small>下一首</small></button>
+          <button type="button" data-player-action="stop" aria-label="停止">■<small>停止</small></button>
+        </div>
+
+        <article class="volume-card">
+          <div><strong>音响音量</strong><span id="playerVolumeLabel">25%</span></div>
+          <div class="volume-control"><span>小</span><input id="playerVolume" type="range" min="0" max="60" step="1" value="25" aria-label="音响音量"><span>大</span></div>
+          <small>为保护宝宝听力，页面最高设置为 60%。</small>
+        </article>
+
+        <aside class="notice-card play-notice">
+          <strong>独立播放功能</strong>
+          <p>“陪我玩”不会被睡眠、哭泣或其他监控状态自动触发；只有在这个页面手动选择类目后才会播放。</p>
+        </aside>
+      </section>
+
+      <section class="page" data-page="records">
+        <div class="page-title-row">
+          <div><p class="eyebrow">DAILY RECORDS</p><h2>状态记录</h2></div>
+          <input type="date" id="recordDate">
+        </div>
+        <div class="summary-grid">
+          <article><span>睡眠总时长</span><strong id="sleepTotal">—</strong></article>
+          <article><span>清醒总时长</span><strong id="awakeTotal">—</strong></article>
+        </div>
+        <article class="timeline-card">
+          <div class="section-heading"><strong>状态时间段</strong><span id="recordCount">0 条</span></div>
+          <div class="timeline-list" id="activityTimeline"></div>
+        </article>
+        <article class="timeline-card">
+          <div class="section-heading"><strong>睡姿时间段</strong><span>持续记录</span></div>
+          <div class="timeline-list" id="postureTimeline"></div>
+        </article>
+        <article class="timeline-card">
+          <div class="section-heading"><strong>大模型观察</strong><span id="observationCount">0 条</span></div>
+          <p class="observation-intro">保留模型看到的事实和自由描述；正式时间段只采用经过连续确认的结果。</p>
+          <div class="observation-list" id="observationList"></div>
+        </article>
+      </section>
+
+      <section class="page" data-page="smiles">
+        <div class="page-title-row">
+          <div><p class="eyebrow">LOCAL MEMORIES</p><h2>收藏</h2></div>
+          <span class="disk-pill" id="diskPill">硬盘检测中</span>
+        </div>
+        <p class="page-intro">查看和管理不同表情、活动状态及睡姿照片。自动照片只保存大模型实际分析过的画面。</p>
+        <div class="photo-filters" id="photoFilters" aria-label="照片分类">
+          <button class="selected" data-photo-filter="all">全部</button>
+          <button data-photo-filter="smile">笑脸</button>
+          <button data-photo-filter="expression:calm">表情·平静</button>
+          <button data-photo-filter="expression:happy">表情·开心</button>
+          <button data-photo-filter="expression:unhappy">表情·不开心</button>
+          <button data-photo-filter="expression:crying">表情·哭泣</button>
+          <button data-photo-filter="sleeping">睡觉</button>
+          <button data-photo-filter="awake">清醒</button>
+          <button data-photo-filter="supine">仰睡</button>
+          <button data-photo-filter="side">侧睡</button>
+          <button data-photo-filter="prone">趴睡</button>
+        </div>
+        <div class="smile-grid" id="smileGrid"></div>
+        <div class="empty-state" id="smileEmpty" hidden>
+          <span>♡</span><strong id="photoEmptyTitle">还没有收藏</strong><p id="photoEmptyText">自动检测或手动保存的照片会出现在这里。</p>
+        </div>
+      </section>
+
+      <section class="page" data-page="settings">
+        <div class="page-title-row"><div><p class="eyebrow">SYSTEM</p><h2>设备状态</h2></div></div>
+        <div class="settings-list">
+          <article id="lanAccessSetting"><div><strong>监控访问</strong><small id="lanAccessDetail">仅已登录用户可查看监控</small></div><label class="access-switch" aria-label="监控访问"><input type="checkbox" id="lanAccessSwitch"><span></span></label></article>
+          <article><div><strong>成人测试模式</strong><small id="observationSubjectDetail">关闭：观察宝宝；开启：观察成人。切换会改变大模型 Qwen 的 Prompt，重新确认状态后开始计时。成人测试记录不代表宝宝识别准确率。</small></div><label class="access-switch" aria-label="成人测试模式"><input type="checkbox" id="observationSubjectSwitch"><span></span></label></article>
+          <article id="voiceControlSetting"><div><strong>语音控制音乐</strong><small id="voiceControlDetail">正在检查离线语音组件</small></div><label class="access-switch" aria-label="语音控制音乐"><input type="checkbox" id="voiceControlSwitch"><span></span></label></article>
+          <article id="voiceWakeSetting"><div><strong>语音唤醒词</strong><small id="voiceWakeDetail">每日 07:00–23:00 监听，唤醒后六秒内说出音乐指令</small></div><span id="voiceWakeBadge">八戒</span></article>
+          <article><div><strong>摄像头</strong><small id="cameraSetting">检测中</small></div><span id="cameraSettingBadge">—</span></article>
+          <article><div><strong>本地视觉模型</strong><small id="modelSetting">EmotiEffLib + 睡姿小模型</small></div><span id="modelSettingBadge">—</span></article>
+          <article><div><strong>照片存储</strong><small id="storageSetting">媒体存储</small></div><span id="storageSettingBadge">—</span></article>
+          <article><div><strong>数据隐私</strong><small id="privacyDetail">摄像头、记录和照片不离开授权网络</small></div><span class="good" id="privacyBadge">仅本地</span></article>
+          <article id="installAppSetting" hidden><div><strong>安装到主屏幕</strong><small>以独立 App 方式打开监控页面</small></div><button class="settings-action" id="installAppButton">安装</button></article>
+          <article id="remoteAccessSetting" hidden><div><strong>登录会话</strong><small>一小时会话，退出后立即撤销</small></div><button class="settings-action danger" id="logoutButton">退出</button></article>
+        </div>
+        <aside class="notice-card">
+          <strong>辅助提醒说明</strong>
+          <p>AI 识别可能出现误判或漏报，本系统不能替代成人看护，也不是医疗级生命体征设备。</p>
+        </aside>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="主导航">
+      <button class="active" data-target="monitor"><img src="/assets/nav/monitor.jpg" alt="">监控</button>
+      <button id="playNavButton" data-target="play"><img src="/assets/nav/play.png" alt="">陪我玩</button>
+      <button data-target="records"><img src="/assets/nav/records.jpg" alt="">记录</button>
+      <button data-target="smiles"><img src="/assets/nav/collection.jpg" alt="">收藏</button>
+      <button data-target="settings"><img src="/assets/nav/settings.jpg" alt="">设置</button>
+    </nav>
+  </div>
+
+  <div class="wake-overlay" id="wakeOverlay" hidden>
+    <div class="wake-dialog">
+      <span class="wake-symbol">☀</span>
+      <p>Edge AI Monitor</p>
+      <h2>睡醒啦</h2>
+      <button id="dismissWake">我知道了</button>
+    </div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+  <script src="/app.js?v=23" defer></script>
+</body>
+</html>
