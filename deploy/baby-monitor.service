@@ -1,0 +1,17 @@
+[Unit]
+Description=Edge AI Infant Monitoring Research Platform
+After=network.target
+
+[Service]
+Type=simple
+# User service: install the checkout at ~/baby-monitor-public.
+WorkingDirectory=%h/baby-monitor-public
+ExecStart=%h/baby-monitor-public/.venv/bin/python -B server.py
+EnvironmentFile=%h/baby-monitor-public/.env
+UMask=0077
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
