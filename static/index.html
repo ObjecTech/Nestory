@@ -136,6 +136,7 @@
       <section class="page" data-page="records">
         <div class="page-title-row">
           <div><p class="eyebrow">DAILY RECORDS</p><h2>状态记录</h2></div>
+          <select id="recordMode" aria-label="记录观察模式"><option value="infant">婴幼儿记录</option><option value="adult_test">成人测试记录</option><option value="legacy_unknown">历史模式未知</option></select>
           <input type="date" id="recordDate">
         </div>
         <div class="summary-grid">
@@ -186,7 +187,7 @@
         <div class="page-title-row"><div><p class="eyebrow">SYSTEM</p><h2>设备状态</h2></div></div>
         <div class="settings-list">
           <article id="lanAccessSetting"><div><strong>监控访问</strong><small id="lanAccessDetail">仅已登录用户可查看监控</small></div><label class="access-switch" aria-label="监控访问"><input type="checkbox" id="lanAccessSwitch"><span></span></label></article>
-          <article><div><strong>成人测试模式</strong><small id="observationSubjectDetail">关闭：观察宝宝；开启：观察成人。切换会改变大模型 Qwen 的 Prompt，重新确认状态后开始计时。成人测试记录不代表宝宝识别准确率。</small></div><label class="access-switch" aria-label="成人测试模式"><input type="checkbox" id="observationSubjectSwitch"><span></span></label></article>
+          <article><div><strong>成人测试模式</strong><small id="observationSubjectDetail">关闭：观察宝宝；开启：观察成人。切换会改变大模型 Qwen 的 Prompt，重新确认状态后开始计时。成人测试记录单独标记，婴幼儿统计不包含它；历史来源不明的数据保留为模式未知。</small></div><label class="access-switch" aria-label="成人测试模式"><input type="checkbox" id="observationSubjectSwitch"><span></span></label></article>
           <article id="voiceControlSetting"><div><strong>语音控制音乐</strong><small id="voiceControlDetail">正在检查离线语音组件</small></div><label class="access-switch" aria-label="语音控制音乐"><input type="checkbox" id="voiceControlSwitch"><span></span></label></article>
           <article id="voiceWakeSetting"><div><strong>语音唤醒词</strong><small id="voiceWakeDetail">每日 07:00–23:00 监听，唤醒后六秒内说出音乐指令</small></div><span id="voiceWakeBadge">八戒</span></article>
           <article><div><strong>摄像头</strong><small id="cameraSetting">检测中</small></div><span id="cameraSettingBadge">—</span></article>
@@ -221,6 +222,6 @@
     </div>
   </div>
   <div class="toast" id="toast" hidden></div>
-  <script src="/app.js?v=23" defer></script>
+  <script src="/app.js?v=27" defer></script>
 </body>
 </html>

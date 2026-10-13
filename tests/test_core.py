@@ -366,6 +366,7 @@ class ManualClassifiedPhotoTest(unittest.TestCase):
                     return jpeg
 
             app = BabyMonitorApp.__new__(BabyMonitorApp)
+            app._observation_lock = threading.RLock()
             app.config = SimpleNamespace(
                 classified_photos_enabled=True,
                 classified_daily_limit=250,
@@ -381,11 +382,11 @@ class ManualClassifiedPhotoTest(unittest.TestCase):
             result = app.save_current_classified_photo()
             self.assertEqual(len(result["saved"]), 2)
             self.assertEqual(
-                len(list((root / "media/classified/activity/sleeping").rglob("*.jpg"))),
+                len(list((root / "media/classified/infant/activity/sleeping").rglob("*.jpg"))),
                 1,
             )
             self.assertEqual(
-                len(list((root / "media/classified/posture/left_side").rglob("*.jpg"))),
+                len(list((root / "media/classified/infant/posture/left_side").rglob("*.jpg"))),
                 1,
             )
 
@@ -397,7 +398,7 @@ class ManualClassifiedPhotoTest(unittest.TestCase):
             )
             self.assertTrue(result["trashed"])
             self.assertFalse(
-                list((root / "media/classified/activity/sleeping").rglob("*.jpg"))
+                list((root / "media/classified/infant/activity/sleeping").rglob("*.jpg"))
             )
             self.assertEqual(
                 len(list((root / "media/_trash/photos").rglob("*.jpg"))), 1
@@ -428,6 +429,7 @@ class ManualClassifiedPhotoTest(unittest.TestCase):
                     return raw
 
             app = BabyMonitorApp.__new__(BabyMonitorApp)
+            app._observation_lock = threading.RLock()
             app.config = SimpleNamespace(
                 classified_photos_enabled=True,
                 classified_daily_limit=250,
@@ -469,6 +471,7 @@ class ManualClassifiedPhotoTest(unittest.TestCase):
                     return raw
 
             app = BabyMonitorApp.__new__(BabyMonitorApp)
+            app._observation_lock = threading.RLock()
             app.config = SimpleNamespace(
                 media_mount=Path("/"),
                 media_dir=root / "media",

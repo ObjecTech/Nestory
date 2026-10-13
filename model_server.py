@@ -11,11 +11,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import torch
-from PIL import Image
+from PIL import Image, ImageFile
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 from baby_monitor.vlm import normalize_observation
-from baby_monitor.model_prompt import observation_prompt
+from baby_monitor.model_prompt import INFANT_PROMPT, observation_prompt
+from baby_monitor.observation_mode import mode_name
 
 
 MODEL_PATH = Path(
@@ -27,31 +30,7 @@ MAX_NEW_TOKENS = int(os.getenv("BMON_VLM_MAX_NEW_TOKENS", "220"))
 MAX_IMAGE_BYTES = int(os.getenv("BMON_VLM_MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))
 MAX_IMAGE_EDGE = int(os.getenv("BMON_VLM_MAX_IMAGE_EDGE", "672"))
 
-PROMPT = """只观察图片中能够直接看到的事实，不作医疗判断，也不要猜测看不到的内容。
-只返回一个 JSON 对象，不要 Markdown，不要解释。字段必须完整：
-{
-  "baby_visible": true/false/null,
-  "visibility": "visible|partial|not_visible|unknown",
-  "sleep_state": "sleeping|awake|drowsy|unknown",
-  "posture": "supine|side|prone|unknown",
-  "expression": "calm|happy|unhappy|crying|neutral|unknown",
-  "activity_level": "still|low|active|unknown",
-  "confidence": 0到1,
-  "expression_confidence": 0到1,
-  "posture_confidence": 0到1,
-  "visibility_confidence": 0到1,
-  "suggested_state": "简短中文标签，可使用比预设分类更合适的描述",
-  "observed_actions": ["最多8个可见动作"],
-  "description": "一句简短中文可观察事实"
-}
-重要一致性规则：如果没有看见宝宝，或不能确认画面中是宝宝，baby_visible 必须为 false 或 null，sleep_state、posture、expression、activity_level 全部必须为 unknown。
-睡醒状态只区分 sleeping、awake、drowsy；不要把开心、哭泣混入睡醒状态。
-睡姿只判断仰卧 supine、侧卧 side、俯卧/趴卧 prone，不判断左右方向。只有身体主体清楚可见时才判断，否则 posture=unknown。
-只有脸部清楚可见时才判断表情；脸被遮挡、过小、侧脸不清或画面中只有手脚时，expression=unknown 且 expression_confidence=0。"""
-PROMPT += """
-置信度规则：visibility_confidence 只表示你对“宝宝是否在画面中”的把握；如果能明确确认画面中没有宝宝，baby_visible=false 且 visibility_confidence 应较高。confidence 表示对睡醒状态的把握，expression_confidence 表示对表情的把握。没有宝宝时两者应为 0。无法从单张图片确认的动作、姿势或表情必须填 unknown，不要猜测。"""
-PROMPT += """
-照片中只出现手、脚、衣物、被子隆起或很小的一部分身体时，可以判断 visibility=partial，但不能据此判断睡着、清醒、睡姿或表情，这些字段必须为 unknown。不要把枕头、玩偶、床单褶皱或被子隆起当成宝宝。"""
+PROMPT = INFANT_PROMPT
 
 
 def _extract_json(text: str) -> dict:
@@ -132,9 +111,10 @@ class Engine:
         return {
             "model": "Qwen3-VL-2B-Instruct",
             "person_test_mode": person_test_mode,
+            "observation_mode": mode_name(person_test_mode),
             "load_seconds": self.load_seconds,
             "infer_seconds": infer_seconds,
-            "observation": normalize_observation(_extract_json(text)),
+            "observation": normalize_observation(_extract_json(text), person_test_mode=person_test_mode),
         }
 
 

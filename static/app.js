@@ -127,6 +127,8 @@ async function api(path, options = {}) {
   return body;
 }
 
+const observationModeLabels = {infant: "婴幼儿", adult_test: "成人测试", legacy_unknown: "历史模式未知"};
+
 function renderStatus(data) {
   $("#personTestBanner").hidden = !data.person_test_mode;
   if (!$("#observationSubjectSwitch").disabled) {
@@ -135,9 +137,11 @@ function renderStatus(data) {
   const previousActivity = state.previousActivity;
   state.status = data;
   const cameraOnline = data.camera.online;
-  const activity = cameraOnline ? data.activity.value : "unknown";
+  const activityValid = data.observation_valid !== false || data.activity.source === "manual";
+  const postureValid = data.observation_valid !== false || data.posture.source === "manual";
+  const activity = cameraOnline && activityValid ? data.activity.value : "unknown";
   state.previousActivity = activity;
-  const posture = cameraOnline ? data.posture.value : "unknown";
+  const posture = cameraOnline && postureValid ? data.posture.value : "unknown";
   $("#activityTitle").textContent = cameraOnline
     ? (activityLabels[activity] || activity)
     : "等待摄像头画面";
@@ -146,6 +150,8 @@ function renderStatus(data) {
     : (data.activity.source === "manual" ? "手动校正" : "当前状态");
   $("#activityDuration").textContent = !cameraOnline
     ? "画面恢复后自动分析"
+    : !activityValid
+      ? "上次结果已过期，等待新的成功观察"
     : activity === "unknown"
       ? "等待识别结果"
     : `已持续 ${formatDuration(data.activity.duration_seconds)}`;
@@ -154,6 +160,8 @@ function renderStatus(data) {
     : "等待画面";
   $("#postureDuration").textContent = !cameraOnline
     ? "摄像头恢复后重新判断"
+    : !postureValid
+      ? "上次结果已过期，等待新的成功观察"
     : posture === "unknown"
       ? "等待识别结果"
     : `已持续 ${formatDuration(data.posture.duration_seconds)}`;
@@ -186,7 +194,9 @@ function renderStatus(data) {
   $("#cameraSettingBadge").className = online ? "good" : "";
   $("#modelSettingBadge").textContent = modelOnline ? "运行中" : (online ? "正在连接" : "等待画面");
   $("#modelSettingBadge").className = modelOnline ? "good" : "";
-  $("#modelSetting").textContent = modelOnline ? data.model.name : (data.model.last_error || data.model.name);
+  $("#modelSetting").textContent = modelOnline
+    ? `${data.model.name}${data.model.posture_classifier_available === false ? " · 轻量睡姿模型未配置" : ""}`
+    : (data.model.last_error || data.model.name);
 
   const storage = data.storage;
   const storageText = storage.mounted ? "存储就绪" : "存储不可用";
@@ -548,7 +558,7 @@ function renderTimeline(container, items) {
     const color = item.category === "activity" ? activityColors[item.value] : "#7f9d8a";
     return `<div class="timeline-item">
       <span class="timeline-time">${formatTime(item.start_ts)}–${end}</span>
-      <span class="timeline-state"><i style="background:${color}"></i>${item.value === "unknown" ? "未确认" : (labels[item.value] || item.value)}${(item.note || "").startsWith("[成人测试]") ? " · 成人测试" : ""}</span>
+      <span class="timeline-state"><i style="background:${color}"></i>${item.value === "unknown" ? "未确认" : (labels[item.value] || item.value)}${item.observation_mode ? " · " + (observationModeLabels[item.observation_mode] || "历史模式未知") : ""}</span>
       <span class="timeline-duration">${formatDuration(item.duration_seconds)}</span>
     </div>`;
   }).join("");
@@ -556,10 +566,11 @@ function renderTimeline(container, items) {
 
 async function loadTimeline() {
   const date = $("#recordDate").value;
+  const mode = $("#recordMode").value || "infant";
   try {
     const [data, observations] = await Promise.all([
-      api(`/api/timeline?date=${encodeURIComponent(date)}`),
-      api(`/api/observations?date=${encodeURIComponent(date)}&limit=200`),
+      api(`/api/timeline?date=${encodeURIComponent(date)}&mode=${encodeURIComponent(mode)}`),
+      api(`/api/observations?date=${encodeURIComponent(date)}&mode=${encodeURIComponent(mode)}&limit=200`),
     ]);
     const intervals = Array.isArray(data?.intervals) ? data.intervals : [];
     const activities = intervals.filter(item => item?.category === "activity");
@@ -610,7 +621,7 @@ function renderObservations(items) {
       : item.sleep_state === "drowsy"
       ? "有些困倦"
       : "观察记录";
-    title.textContent = item.suggested_state || sleepLabel;
+    title.textContent = `${item.suggested_state || sleepLabel} · ${observationModeLabels[item.observation_mode] || "历史模式未知"}`;
 
     const description = document.createElement("p");
     description.textContent = item.description || "模型没有提供可确认的画面描述。";
@@ -619,9 +630,9 @@ function renderObservations(items) {
     tags.className = "observation-tags";
     const values = [
       item.baby_visible === false
-        ? (state.status?.person_test_mode ? "未看见人" : "未看见宝宝")
+        ? (item.observation_mode === "adult_test" ? "未看见测试成人" : item.observation_mode === "infant" ? "未看见宝宝" : "对象未见（模式未知）")
         : item.baby_visible === true
-        ? (state.status?.person_test_mode ? "看见人" : "看见宝宝")
+        ? (item.observation_mode === "adult_test" ? "看见测试成人" : item.observation_mode === "infant" ? "看见宝宝" : "对象可见（模式未知）")
         : "可见性未知",
       item.sleep_state === "sleeping" ? "睡眠" : item.sleep_state === "awake" ? "清醒" : item.sleep_state === "drowsy" ? "困倦" : "睡醒未知",
       postureLabels[item.posture] || item.posture,
@@ -678,7 +689,7 @@ function renderPhotos() {
     const caption = document.createElement("span");
     caption.className = "smile-caption";
     const title = document.createElement("strong");
-    title.textContent = item.label;
+    title.textContent = `${item.label} · ${observationModeLabels[item.observation_mode] || "历史模式未知"}`;
     const details = document.createElement("span");
     details.textContent = `${new Date(item.ts * 1000).toLocaleDateString("zh-CN")} · ${formatTime(item.ts)}`;
     caption.append(title, details);
@@ -916,6 +927,7 @@ async function initialize() {
   configurePwa();
   const today = new Date();
   $("#recordDate").value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  $("#recordMode").addEventListener("change", loadTimeline);
   $("#recordDate").addEventListener("change", loadTimeline);
   $("#enableAlertButton").addEventListener("click", enableAlerts);
   $("#dismissWake").addEventListener("click", () => { $("#wakeOverlay").hidden = true; });

@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from .camera import Camera, Frame
 from .database import Database
+from .observation_mode import mode_name
 
 
 VISIBILITY_VALUES = {"visible", "partial", "not_visible", "unknown"}
@@ -57,7 +58,7 @@ def _posture(value: Any) -> str:
     return text if text in POSTURE_VALUES else "unknown"
 
 
-def normalize_observation(payload: dict[str, Any]) -> dict[str, Any]:
+def normalize_observation(payload: dict[str, Any], person_test_mode: bool = False) -> dict[str, Any]:
     """Validate model output and enforce cross-field consistency."""
     visibility = _enum(payload.get("visibility"), VISIBILITY_VALUES)
     baby_visible_raw = payload.get("baby_visible")
@@ -77,9 +78,9 @@ def normalize_observation(payload: dict[str, Any]) -> dict[str, Any]:
         # Conflicting visibility fields are not safe enough to drive the timeline.
         baby_visible = None
         visibility = "unknown"
-    elif visibility_boolean is not None:
-        baby_visible = visibility_boolean
-    elif baby_visible is True:
+    elif visibility_boolean is False:
+        baby_visible = False
+    elif baby_visible is True and visibility == "unknown":
         visibility = "visible"
     elif baby_visible is False:
         visibility = "not_visible"
@@ -114,13 +115,14 @@ def normalize_observation(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
     # Never infer a state for an absent or unconfirmed baby.
-    if baby_visible is not True:
+    if baby_visible is not True or visibility == "partial":
         result.update(
             {
                 "sleep_state": "unknown",
                 "posture": "unknown",
                 "expression": "unknown",
                 "activity_level": "unknown",
+                "confidence": 0.0,
                 "expression_confidence": 0.0,
                 "posture_confidence": 0.0,
             }
@@ -142,7 +144,28 @@ def normalize_observation(payload: dict[str, Any]) -> dict[str, Any]:
         r"坐在|坐着|坐于|坐姿|端坐|坐起|站立|站着|站在|行走|走动",
         result["description"],
     ))
+    non_lying = non_lying or payload.get("body_state") in {"sitting", "standing", "walking"}
     result["posture_not_lying"] = non_lying
+    body_hidden = payload.get("body_visible") is False or bool(re.search(
+        r"只[见有].{0,5}(脸|面部|头部)|仅.{0,5}(脸|面部|头部)|未见.{0,6}身体|身体.{0,4}(遮挡|不可见)", result["description"]))
+    face_hidden = payload.get("face_visible") is False
+    if body_hidden:
+        result["posture"] = "unknown"
+        result["posture_confidence"] = 0.0
+    if face_hidden:
+        result["expression"] = "unknown"
+        result["expression_confidence"] = 0.0
+        if result["sleep_state"] in {"sleeping", "drowsy"}:
+            result["sleep_state"] = "unknown"
+            result["confidence"] = 0.0
+    simulation = person_test_mode and (payload.get("sleep_evidence") in {"eyes_closed_only", "simulation"}
+        or bool(re.search(r"模拟|假装|(?:闭眼|闭目).{0,6}(?:静止|静卧|不动)", result["description"])))
+    if simulation and result["sleep_state"] == "sleeping":
+        result["sleep_state"] = "unknown"
+        result["confidence"] = 0.0
+        if re.search(r"睡|入眠", result["suggested_state"]):
+            result["suggested_state"] = ""
+
     if non_lying:
         result["posture"] = "unknown"
         result["posture_confidence"] = 0.0
@@ -221,12 +244,15 @@ class VLMObserver:
         on_observation: Callable[[dict[str, Any]], None],
         on_expression: Callable[[str, float, str, Frame], Any] | None = None,
         person_test_mode: bool = False,
+        mode_lock=None,
     ):
         self.camera = camera
-        self._mode_lock = threading.RLock()
+        self._mode_lock = mode_lock or threading.RLock()
         self._mode_generation = 0
+        self._mode_since_ts = 0.0
         self.person_test_mode = person_test_mode
         self.database = database
+        self.database.activate_mode(mode_name(person_test_mode), reset=False)
         self.enabled = enabled
         self.service_url = service_url.rstrip("/")
         self.interval_seconds = interval_seconds
@@ -243,8 +269,9 @@ class VLMObserver:
         self.last_error: str | None = None
         self.last_result: dict[str, Any] | None = None
         self.last_analysis_ts: float | None = None
+        self.last_success_ts: float | None = None
         self._filter = ObservationFilter()
-        previous_observations = self.database.observations(1)
+        previous_observations = self.database.observations(1, observation_mode=mode_name(person_test_mode))
         self._last_recorded_signature = (
             self._observation_signature(previous_observations[0])
             if previous_observations
@@ -270,17 +297,17 @@ class VLMObserver:
                 return
             self.person_test_mode = enabled
             self._mode_generation += 1
+            self._mode_since_ts = time.time()
             self._filter = ObservationFilter()
             self._last_recorded_signature = None
             self._observation_candidate = None
             self._last_stable_expression = "unknown"
             self.last_result = None
             self.last_analysis_ts = None
+            self.last_success_ts = None
             self.online = False
             self.last_error = None
-            for category in ("activity", "posture", "presence"):
-                self.database.transition(category, "unknown", "system",
-                                         note="观察对象已切换，等待重新确认")
+            self.database.activate_mode(mode_name(enabled))
 
     @property
     def component(self) -> dict[str, Any]:
@@ -289,6 +316,8 @@ class VLMObserver:
             "name": "Qwen3-VL-2B-Instruct",
             "error": self.last_error,
             "last_analysis_ts": self.last_analysis_ts,
+            "last_success_ts": self.last_success_ts,
+            "observation_mode": mode_name(self.person_test_mode),
         }
 
     def start(self) -> None:
@@ -334,10 +363,14 @@ class VLMObserver:
             envelope = json.loads(response.read().decode("utf-8"))
         if not isinstance(envelope, dict) or not isinstance(envelope.get("observation"), dict):
             raise RuntimeError("Qwen 服务返回格式错误")
-        if bool(envelope.get("person_test_mode", False)) != request_mode:
+        if envelope.get("person_test_mode", False) is not request_mode:
             raise RuntimeError("Qwen 服务测试模式与应用不一致，请重启模型服务")
+        expected_mode = mode_name(request_mode)
+        if envelope.get("observation_mode", expected_mode) != expected_mode:
+            raise RuntimeError("Qwen observation mode mismatch")
+        envelope["observation_mode"] = expected_mode
         envelope["_mode_generation"] = generation
-        return normalize_observation(envelope["observation"]), envelope
+        return normalize_observation(envelope["observation"], person_test_mode=request_mode), envelope
 
     def _transition(
         self,
@@ -387,14 +420,15 @@ class VLMObserver:
             metadata_json=json.dumps(
                 {
                     "model": envelope.get("model"),
-                    "person_test_mode": envelope.get("person_test_mode", False),
+                    "person_test_mode": self.person_test_mode,
+                    "observation_mode": mode_name(self.person_test_mode),
                     "load_seconds": envelope.get("load_seconds"),
                     "infer_seconds": envelope.get("infer_seconds"),
                 },
                 ensure_ascii=False,
             ),
         )
-        published = {"id": observation_id, "ts": now, **observation}
+        published = {"id": observation_id, "ts": now, "observation_mode": mode_name(self.person_test_mode), **observation}
         self.on_observation(published)
         self._last_recorded_signature = signature
         return True
@@ -488,8 +522,24 @@ class VLMObserver:
                 except RuntimeError:
                     pass
             self._last_stable_expression = expression
+        # Keep a single uncertain frame from erasing a confirmed state, but do
+        # not display a previous sleep/lying result indefinitely under occlusion.
+        for category, value in (("activity", activity_from_observation(observation)),
+                                ("posture", observation["posture"])):
+            unknown_key = category + "_unknown"
+            if value == "unknown":
+                self._filter.reset(category)
+                if self._filter.observe(unknown_key, "unconfirmed", now, self.stable_seconds):
+                    if self.database.current().get(category, {}).get("value") != "unknown":
+                        self.on_transition(category, "unknown", "qwen3-vl-2b", 0.0,
+                                           "连续观察无法确认当前状态", frame)
+            else:
+                self._filter.reset(unknown_key)
+
         confidence = observation["confidence"]
         activity = activity_from_observation(observation)
+        if activity == "unknown":
+            self._filter.reset("activity")
         if activity != "unknown" and confidence >= max(0.75, self.confidence_threshold):
             self._transition(
                 "activity",
@@ -500,6 +550,8 @@ class VLMObserver:
             )
 
         posture = observation["posture"]
+        if posture == "unknown":
+            self._filter.reset("posture")
         posture_confidence = observation["posture_confidence"] or confidence
         if observation.get("posture_not_lying"):
             if self._filter.observe("posture_not_lying", "confirmed", now, self.stable_seconds):
@@ -521,29 +573,42 @@ class VLMObserver:
                 frame,
             )
 
+    def _observe_frame(self, frame: Frame) -> None:
+        # Network/model work stays outside the shared mode lock. The worker is
+        # single-threaded, so slow requests never accumulate in a queue.
+        with self._mode_lock:
+            if frame.ts < self._mode_since_ts:
+                return
+            generation = self._mode_generation
+            self.last_analysis_ts = time.time()
+        try:
+            observation, envelope = self._request(frame.jpeg)
+            with self._mode_lock:
+                if generation != self._mode_generation or envelope.get("_mode_generation") != generation:
+                    return
+                if not self.camera.online:
+                    return
+                self.last_result = observation
+                self.online = True
+                self.last_error = None
+                self.last_success_ts = time.time()
+                self._apply(observation, envelope, frame)
+        except Exception as exc:
+            with self._mode_lock:
+                if generation != self._mode_generation:
+                    return
+                self.online = False
+                self.last_error = f"Qwen 观察失败: {exc}"[:300]
+                # last_success_ts and last_result remain inspectable as history.
+
     def _run(self) -> None:
         while not self._stop.wait(1.0):
             if not self.camera.online:
                 continue
-            if self.last_analysis_ts is not None:
-                if time.time() - self.last_analysis_ts < self._next_interval():
-                    continue
-            frame = self.camera.sharpest_recent(3)
-            if frame is None:
-                continue
-            self.last_analysis_ts = time.time()
-            try:
-                observation, envelope = self._request(frame.jpeg)
-                with self._mode_lock:
-                    if envelope.get("_mode_generation") != self._mode_generation:
+            with self._mode_lock:
+                if self.last_analysis_ts is not None:
+                    if time.time() - self.last_analysis_ts < self._next_interval():
                         continue
-                    self.last_result = observation
-                    self.online = True
-                    self.last_error = None
-                    self._apply(observation, envelope, frame)
-            except (urllib.error.URLError, TimeoutError) as exc:
-                self.online = False
-                self.last_error = f"Qwen 服务连接失败: {exc}"[:300]
-            except Exception as exc:
-                self.online = False
-                self.last_error = f"Qwen 观察失败: {exc}"[:300]
+            frame = self.camera.sharpest_recent(3)
+            if frame is not None and time.time() - frame.ts <= 3.0:
+                self._observe_frame(frame)

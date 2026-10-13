@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import os
 import queue
 import shutil
 import threading
@@ -11,8 +10,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from functools import wraps
 
-from PIL import Image
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from .camera import Camera, Frame
 from .config import Config
@@ -21,6 +23,7 @@ from .inference import InferenceWorker
 from .play_with_me import PlayWithMePlayer
 from .voice_control import VoiceControl
 from .vlm import VLMObserver
+from .observation_mode import mode_name, validate_mode
 
 
 CLASSIFIED_INTERVAL_SECONDS = {
@@ -89,9 +92,22 @@ class EventBus:
                     pass
 
 
+def observation_locked(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        lock = getattr(self, "_observation_lock", None)
+        if lock is not None:
+            with lock:
+                return method(self, *args, **kwargs)
+        return method(self, *args, **kwargs)
+    return locked
+
+
 class BabyMonitorApp:
     def __init__(self, config: Config):
         self.config = config
+        self._observation_lock = threading.RLock()
+        self._subject_started_ts = 0.0
         config.ensure_directories()
         self._subject_settings = config.data_dir / "observation_subject.json"
         person_test_mode = config.person_test_mode
@@ -99,7 +115,7 @@ class BabyMonitorApp:
             saved = json.loads(self._subject_settings.read_text())
             if type(saved.get("person_test_mode")) is bool:
                 person_test_mode = saved["person_test_mode"]
-        self.database = Database(config.data_dir / "baby_monitor.db")
+        self.database = Database(config.data_dir / "baby_monitor.db", observation_mode=mode_name(person_test_mode))
         self.camera = Camera(
             config.camera_device,
             config.camera_width,
@@ -140,6 +156,7 @@ class BabyMonitorApp:
         self._classified_last_saved: dict[str, float] = {}
         self._classified_last_hash: dict[str, int] = {}
         self.inference = InferenceWorker(
+            person_test_mode=person_test_mode, mode_lock=self._observation_lock,
             camera=self.camera,
             database=self.database,
             enabled=config.model_enabled,
@@ -161,7 +178,7 @@ class BabyMonitorApp:
             on_classification=self.consider_classified_photo,
         )
         self.vlm = VLMObserver(
-            person_test_mode=person_test_mode,
+            person_test_mode=person_test_mode, mode_lock=self._observation_lock,
             camera=self.camera,
             database=self.database,
             enabled=config.vlm_enabled,
@@ -178,12 +195,19 @@ class BabyMonitorApp:
             on_expression=self.save_expression_photo,
         )
 
+    @observation_locked
     def set_observation_subject(self, enabled: bool) -> dict[str, Any]:
         def persist(value):
             temporary = self._subject_settings.with_suffix(".tmp")
             temporary.write_text(json.dumps({"person_test_mode": value}))
             temporary.replace(self._subject_settings)
+        previous = self.vlm.person_test_mode
         self.vlm.set_person_test_mode(enabled, persist=persist)
+        self.inference.set_person_test_mode(enabled)
+        if previous != enabled:
+            self._subject_started_ts = time.time()
+            self._classified_last_saved.clear()
+            self._classified_last_hash.clear()
         result = self.status()
         self.events.publish("status", result)
         return result
@@ -223,6 +247,7 @@ class BabyMonitorApp:
             result.update({"total_gb": 0, "free_gb": 0, "warning": True})
         return result
 
+    @observation_locked
     def status(self) -> dict[str, Any]:
         now = time.time()
         current = self.database.current()
@@ -230,9 +255,17 @@ class BabyMonitorApp:
         posture = current.get("posture", {})
         presence = current.get("presence", {})
         latest = self.camera.latest()
+        camera_fresh = bool(self.camera.online and latest and now - latest.ts <= max(5.0, 3.0 / max(1, self.config.camera_fps)))
+        last_success = self.vlm.last_success_ts if self.vlm.enabled else self.inference.last_success_ts
+        freshness_window = (max(self.config.vlm_interval_seconds, self.config.vlm_sleep_interval_seconds,
+                                self.config.vlm_motion_interval_seconds) + self.config.vlm_timeout_seconds
+                            if self.vlm.enabled else max(self.config.analysis_interval_seconds, 5.0) * 2)
+        observation_valid = bool(camera_fresh and last_success is not None and now - last_success <= freshness_window)
         return {
             "title": "Edge AI Monitor",
             "person_test_mode": self.vlm.person_test_mode,
+            "observation_mode": self.database.observation_mode,
+            "observation_valid": observation_valid,
             "now": now,
             "activity": {
                 "value": activity.get("value", "unknown"),
@@ -259,7 +292,7 @@ class BabyMonitorApp:
                 "note": presence.get("note"),
             },
             "camera": {
-                "online": self.camera.online,
+                "online": camera_fresh,
                 "error": self.camera.error,
                 "last_frame_ts": latest.ts if latest else None,
                 "motion_score": round(self.camera.motion_score, 2),
@@ -267,12 +300,15 @@ class BabyMonitorApp:
                 "resolution": f"{self.config.camera_width}×{self.config.camera_height}",
             },
             "model": {
-                "enabled": self.inference.enabled,
+                "enabled": self.vlm.enabled or self.inference.enabled,
                 "online": self.vlm.online if self.vlm.enabled else self.inference.online,
-                "name": self.inference.model_name,
+                "name": "Qwen3-VL-2B-Instruct" if self.vlm.enabled else self.inference.model_name,
+                "posture_classifier_available": self.inference.posture.online,
                 "architecture": "qwen-vlm-observer-with-lightweight-reference",
                 "last_error": self.vlm.last_error if self.vlm.enabled else self.inference.last_error,
                 "last_analysis_ts": self.vlm.last_analysis_ts if self.vlm.enabled else self.inference.last_analysis_ts,
+                "last_success_ts": last_success,
+                "observation_valid": observation_valid,
                 "last_result": self.vlm.last_result if self.vlm.enabled else self.inference.last_result,
                 "components": {
                     **self.inference.components,
@@ -282,6 +318,7 @@ class BabyMonitorApp:
             "storage": self.storage_status(),
         }
 
+    @observation_locked
     def transition(
         self,
         category: str,
@@ -296,6 +333,7 @@ class BabyMonitorApp:
         )
         payload = {
             "category": category,
+            "observation_mode": self.database.observation_mode,
             "value": value,
             "previous": previous,
             "source": source,
@@ -352,14 +390,18 @@ class BabyMonitorApp:
         limit: int = 100,
         start_ts: float | None = None,
         end_ts: float | None = None,
+        observation_mode: str = "infant",
     ) -> list[dict[str, Any]]:
-        items = self.database.observations(limit, start_ts, end_ts)
+        items = self.database.observations(limit, start_ts, end_ts, validate_mode(observation_mode))
         interval_end = min(time.time(), end_ts) if end_ts is not None else time.time()
         for item in items:
             item["end_ts"] = interval_end
             item["duration_seconds"] = max(0.0, interval_end - item["ts"])
             interval_end = item["ts"]
         return items
+
+    def _frame_in_current_mode(self, frame: Frame) -> bool:
+        return frame.ts >= getattr(self, "_subject_started_ts", 0.0)
 
     @staticmethod
     def _image_hash(jpeg: bytes) -> int:
@@ -374,10 +416,13 @@ class BabyMonitorApp:
                 )
         return result
 
+    @observation_locked
     def consider_classified_photo(self, result: dict[str, Any]) -> bool:
         # Qwen is the primary observer. Its exact analyzed frame is saved only
         # after a stable state change; lightweight periodic supplements produced
         # too many false face detections on blankets.
+        if result.get("observation_mode", self.database.observation_mode) != self.database.observation_mode:
+            return False
         if self.config.vlm_enabled and self.config.vlm_primary:
             return False
         if not self.config.classified_photos_enabled or not result.get("face_detected"):
@@ -407,6 +452,7 @@ class BabyMonitorApp:
             metadata=metadata,
         )
 
+    @observation_locked
     def save_classified_photo(
         self,
         activity: str,
@@ -423,7 +469,7 @@ class BabyMonitorApp:
         if not self.config.media_mount.is_dir():
             raise RuntimeError("媒体存储未挂载，未保存分类照片")
         frame = frame or self.camera.sharpest_recent(5)
-        if frame is None:
+        if frame is None or not self._frame_in_current_mode(frame):
             return False
 
         now = time.time()
@@ -431,9 +477,9 @@ class BabyMonitorApp:
         day_start = datetime.combine(moment.date(), datetime.min.time()).timestamp()
         day_end = day_start + 24 * 60 * 60
         with self._classified_lock:
-            counts = self.database.event_counts("classified_photo", day_start, day_end)
+            counts = self.database.event_counts("classified_photo", day_start, day_end, observation_mode=self.database.observation_mode)
             posture_counts = self.database.event_counts(
-                "classified_posture_photo", day_start, day_end, group_by="posture"
+                "classified_posture_photo", day_start, day_end, group_by="posture", observation_mode=self.database.observation_mode
             )
             if (
                 sum(counts.values()) + sum(posture_counts.values())
@@ -454,6 +500,7 @@ class BabyMonitorApp:
             directory = (
                 self.config.media_dir
                 / "classified"
+                / self.database.observation_mode
                 / "activity"
                 / activity
                 / moment.strftime("%Y/%m/%d")
@@ -484,6 +531,7 @@ class BabyMonitorApp:
             self._classified_last_hash[activity] = image_hash
         return True
 
+    @observation_locked
     def save_expression_photo(
         self,
         expression: str,
@@ -491,7 +539,7 @@ class BabyMonitorApp:
         reason: str,
         frame: Frame,
     ) -> bool:
-        if expression not in EXPRESSION_LABELS or confidence < 0.72:
+        if not self._frame_in_current_mode(frame) or expression not in EXPRESSION_LABELS or confidence < 0.72:
             return False
         if not self.config.media_mount.is_dir():
             raise RuntimeError("媒体存储未挂载，未保存表情照片")
@@ -502,7 +550,7 @@ class BabyMonitorApp:
         with self._classified_lock:
             if (
                 self.database.event_count(
-                    "expression_photo", day_start, day_end
+                    "expression_photo", day_start, day_end, observation_mode=self.database.observation_mode
                 )
                 >= EXPRESSION_DAILY_LIMIT
             ):
@@ -512,6 +560,7 @@ class BabyMonitorApp:
             day_dir = (
                 self.config.media_dir
                 / "classified"
+                / self.database.observation_mode
                 / "expression"
                 / expression
                 / moment.strftime("%Y/%m/%d")
@@ -554,6 +603,7 @@ class BabyMonitorApp:
             )
         return True
 
+    @observation_locked
     def set_manual_state(self, category: str, value: str) -> dict[str, Any]:
         result = self.transition(category, value, "manual", 1.0, "手机手动设置")
         if category == "activity" and not result["classified_photo_saved"]:
@@ -566,6 +616,7 @@ class BabyMonitorApp:
         result["training_sample_saved"] = self.save_training_sample(category, value)
         return result
 
+    @observation_locked
     def save_training_sample(self, category: str, value: str) -> bool:
         """Save human-confirmed examples for the later baby-specific fine-tuning."""
         if (
@@ -575,15 +626,21 @@ class BabyMonitorApp:
         ):
             return False
         frame = self.camera.sharpest_recent(3)
-        if frame is None:
+        if frame is None or not self._frame_in_current_mode(frame):
             return False
         moment = datetime.fromtimestamp(frame.ts)
-        directory = self.config.media_dir / "training" / category / value
+        directory = self.config.media_dir / "training" / self.database.observation_mode / category / value
         directory.mkdir(parents=True, exist_ok=True)
         filename = moment.strftime("%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
         (directory / filename).write_bytes(self.camera.standard_jpeg(frame.jpeg, quality=90))
+        (directory / Path(filename).with_suffix(".json")).write_text(json.dumps({
+            "observation_mode": self.database.observation_mode,
+            "person_test_mode": self.vlm.person_test_mode,
+            "source": "manual", "category": category, "value": value, "ts": frame.ts,
+        }, ensure_ascii=False))
         return True
 
+    @observation_locked
     def save_current_classified_photo(self) -> dict[str, Any]:
         current = self.database.current()
         activity = current.get("activity", {}).get("value", "unknown")
@@ -602,13 +659,14 @@ class BabyMonitorApp:
             raise RuntimeError("今日分类照片已达到保存上限")
         return {"saved": saved, "activity": activity, "posture": posture}
 
+    @observation_locked
     def save_posture_photo(self, posture: str) -> bool:
         if posture not in POSTURE_VALUES or posture == "unknown":
             return False
         if not self.config.media_mount.is_dir():
             raise RuntimeError("媒体存储未挂载，未保存照片")
         frame = self.camera.sharpest_recent(5)
-        if frame is None:
+        if frame is None or not self._frame_in_current_mode(frame):
             raise RuntimeError("摄像头尚无可保存画面")
 
         moment = datetime.fromtimestamp(frame.ts)
@@ -616,10 +674,10 @@ class BabyMonitorApp:
         day_end = day_start + 24 * 60 * 60
         with self._classified_lock:
             activity_counts = self.database.event_counts(
-                "classified_photo", day_start, day_end
+                "classified_photo", day_start, day_end, observation_mode=self.database.observation_mode
             )
             posture_counts = self.database.event_counts(
-                "classified_posture_photo", day_start, day_end, group_by="posture"
+                "classified_posture_photo", day_start, day_end, group_by="posture", observation_mode=self.database.observation_mode
             )
             if sum(activity_counts.values()) + sum(posture_counts.values()) >= self.config.classified_daily_limit:
                 return False
@@ -630,6 +688,7 @@ class BabyMonitorApp:
             directory = (
                 self.config.media_dir
                 / "classified"
+                / self.database.observation_mode
                 / "posture"
                 / posture
                 / moment.strftime("%Y/%m/%d")
@@ -658,15 +717,16 @@ class BabyMonitorApp:
             )
         return True
 
+    @observation_locked
     def save_smile(self, confidence: float = 1.0, reason: str = "manual") -> dict[str, Any]:
         storage = self.storage_status()
         if not storage["mounted"]:
             raise RuntimeError("媒体存储未挂载，未保存照片")
         frame = self.camera.sharpest_recent(5)
-        if frame is None:
+        if frame is None or not self._frame_in_current_mode(frame):
             raise RuntimeError("摄像头尚无可保存画面")
         moment = datetime.fromtimestamp(frame.ts)
-        day_dir = self.config.media_dir / "smiles" / moment.strftime("%Y/%m/%d")
+        day_dir = self.config.media_dir / "smiles" / self.database.observation_mode / moment.strftime("%Y/%m/%d")
         originals = day_dir / "original"
         thumbnails = day_dir / "thumbnail"
         originals.mkdir(parents=True, exist_ok=True)
@@ -699,6 +759,7 @@ class BabyMonitorApp:
         )
         payload = {
             "id": event_id,
+            "observation_mode": self.database.observation_mode,
             "ts": frame.ts,
             "activity": activity,
             "posture": posture,
@@ -762,6 +823,7 @@ class BabyMonitorApp:
                 {
                     "id": item["id"],
                     "event_type": event_type,
+                    "observation_mode": item["observation_mode"],
                     "ts": item["ts"],
                     "kind": kind,
                     "value": value,
@@ -848,8 +910,8 @@ class BabyMonitorApp:
                 raise
         return {"trashed": True, "id": event_id}
 
-    def timeline(self, start_ts: float, end_ts: float) -> dict[str, Any]:
-        intervals = self.database.intervals(start_ts, end_ts)
+    def timeline(self, start_ts: float, end_ts: float, observation_mode: str = "infant") -> dict[str, Any]:
+        intervals = self.database.intervals(start_ts, end_ts, validate_mode(observation_mode))
         totals: dict[str, dict[str, float]] = {}
         for interval in intervals:
             category = interval["category"]
@@ -858,7 +920,7 @@ class BabyMonitorApp:
             totals[category][value] = totals[category].get(value, 0) + interval[
                 "duration_seconds"
             ]
-        return {"intervals": intervals, "totals": totals}
+        return {"observation_mode": observation_mode, "intervals": intervals, "totals": totals}
 
     def resolve_media(self, relative: str) -> Path | None:
         candidate = (self.config.media_dir / relative).resolve()

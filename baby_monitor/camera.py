@@ -7,7 +7,9 @@ from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 @dataclass
@@ -31,6 +33,7 @@ class Camera:
         self._compatible_cache_ts = 0.0
         self._compatible_cache_jpeg: bytes | None = None
         self.motion_score = 0.0
+        self._motion_scores: deque[float] = deque(maxlen=3)
         self.online = False
         self.error: str | None = None
         self._pipeline = None
@@ -38,12 +41,17 @@ class Camera:
         self._stop = threading.Event()
 
     @staticmethod
-    def _gray_small(jpeg: bytes) -> np.ndarray:
-        with Image.open(io.BytesIO(jpeg)) as image:
-            return np.asarray(image.convert("L").resize((64, 36)), dtype=np.float32)
+    def _gray_small(jpeg: bytes) -> np.ndarray | None:
+        try:
+            with Image.open(io.BytesIO(jpeg)) as image:
+                return np.asarray(image.convert("L").resize((64, 36)), dtype=np.float32)
+        except (OSError, ValueError, SyntaxError):
+            return None
 
     @staticmethod
-    def _sharpness(gray: np.ndarray) -> float:
+    def _sharpness(gray: np.ndarray | None) -> float:
+        if gray is None:
+            return 0.0
         dx = np.diff(gray, axis=1)
         dy = np.diff(gray, axis=0)
         return float(dx.var() + dy.var())
@@ -52,18 +60,23 @@ class Camera:
     def standard_jpeg(jpeg: bytes, quality: int = 88) -> bytes:
         """Convert UVC MJPEG frames into baseline JPEGs accepted by Safari."""
         output = io.BytesIO()
-        with Image.open(io.BytesIO(jpeg)) as image:
-            image.convert("RGB").save(
-                output,
-                "JPEG",
-                quality=quality,
-                optimize=False,
-                progressive=False,
-                subsampling=2,
-            )
-        return output.getvalue()
+        try:
+            with Image.open(io.BytesIO(jpeg)) as image:
+                image.convert("RGB").save(
+                    output,
+                    "JPEG",
+                    quality=quality,
+                    optimize=False,
+                    progressive=False,
+                    subsampling=2,
+                )
+            return output.getvalue()
+        except (OSError, ValueError, SyntaxError):
+            return jpeg
 
     def _accept_jpeg(self, jpeg: bytes) -> None:
+        if not jpeg or len(jpeg) < 128:
+            return
         now = time.time()
         with self._condition:
             sample_frame = not self._ring or now - self._ring[-1].ts >= 0.45
@@ -77,7 +90,12 @@ class Camera:
                 self._ring.append(frame)
             if sample_motion and gray is not None:
                 if self._last_analysis_gray is not None:
-                    self.motion_score = float(np.abs(gray - self._last_analysis_gray).mean())
+                    delta = gray - self._last_analysis_gray
+                    # Suppress common exposure/IR brightness shifts; require sustained
+                    # spatial changes rather than one noisy frame to shorten scheduling.
+                    spatial_score = float(np.abs(delta - np.median(delta)).mean())
+                    self._motion_scores.append(spatial_score)
+                    self.motion_score = float(np.median([0.0] * (3 - len(self._motion_scores)) + list(self._motion_scores)))
                 self._last_analysis_gray = gray
                 self._last_analysis_ts = now
             self.online = True
@@ -118,7 +136,12 @@ class Camera:
                     success, mapped = buffer.map(Gst.MapFlags.READ)
                     if success:
                         try:
-                            self._accept_jpeg(bytes(mapped.data))
+                            try:
+                                self._accept_jpeg(bytes(mapped.data))
+                            except Exception:
+                                # Tolerate malformed, truncated or hardware glitch frames
+                                # from any USB camera without terminating or polluting stderr.
+                                pass
                         finally:
                             buffer.unmap(mapped)
                     return Gst.FlowReturn.OK

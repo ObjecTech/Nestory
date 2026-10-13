@@ -13,6 +13,7 @@ from PIL import Image
 
 from .camera import Camera, Frame
 from .database import Database
+from .observation_mode import mode_name
 
 
 NEGATIVE_EMOTIONS = {"Anger", "Contempt", "Disgust", "Fear", "Sadness"}
@@ -109,17 +110,27 @@ class PostureClassifier:
         self._input_name = ""
 
     def load(self) -> None:
+        self.online = False
+        self._session = None
         if not self.model_path.is_file():
             self.error = "等待个体化睡姿模型和训练样本"
             return
-        import onnxruntime as ort
-
-        self._session = ort.InferenceSession(
-            str(self.model_path), providers=["CPUExecutionProvider"]
-        )
-        self._input_name = self._session.get_inputs()[0].name
-        self.online = True
-        self.error = None
+        try:
+            import onnxruntime as ort
+            session = ort.InferenceSession(str(self.model_path), providers=["CPUExecutionProvider"])
+            shape = session.get_inputs()[0].shape
+            expected = (1, 3, 224, 224)
+            if len(shape) != 4 or any(isinstance(v, int) and v != e for v, e in zip(shape, expected)):
+                raise ValueError("睡姿模型输入不兼容 NCHW 224x224")
+            output_shape = session.get_outputs()[0].shape
+            if isinstance(output_shape[-1], int) and output_shape[-1] != len(POSTURE_LABELS):
+                raise ValueError("睡姿模型输出类别不兼容")
+            self._session = session
+            self._input_name = session.get_inputs()[0].name
+            self.online = True
+            self.error = None
+        except Exception as exc:
+            self.error = f"可选睡姿模型不可用: {type(exc).__name__}"
 
     @staticmethod
     def _softmax(values: np.ndarray) -> np.ndarray:
@@ -170,8 +181,14 @@ class InferenceWorker:
         on_transition: Callable[[str, str, str, float | None, str | None], None],
         on_smile: Callable[[float, str], None],
         on_classification: Callable[[dict[str, Any]], None],
+        person_test_mode: bool = False,
+        mode_lock=None,
     ):
         self.camera = camera
+        self._mode_lock = mode_lock or threading.RLock()
+        self.person_test_mode = person_test_mode
+        self._mode_generation = 0
+        self._mode_since_ts = 0.0
         self.database = database
         self.enabled = enabled
         self.model_name = model_name
@@ -190,9 +207,12 @@ class InferenceWorker:
         self.on_smile = on_smile
         self.on_classification = on_classification
         self.posture = PostureClassifier(posture_model_path)
+        if not posture_model_path.is_file():
+            self.posture.error = "等待个体化睡姿模型和训练样本"
         self.online = False
         self.last_error: str | None = None
         self.last_result: dict[str, Any] | None = None
+        self.last_success_ts: float | None = None
         self.last_analysis_ts: float | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -204,6 +224,56 @@ class InferenceWorker:
         self._filter = TemporalStateFilter()
         self._smile_votes: deque[tuple[float, bool, float]] = deque(maxlen=5)
         self._last_smile_ts = 0.0
+
+    def set_person_test_mode(self, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise ValueError("person_test_mode must be boolean")
+        with self._mode_lock:
+            if enabled == self.person_test_mode:
+                return
+            self.person_test_mode = enabled
+            self._mode_generation += 1
+            self._mode_since_ts = time.time()
+            self._filter = TemporalStateFilter()
+            self._smile_votes.clear()
+            self._last_smile_ts = 0.0
+            self.last_result = None
+            self.last_error = None
+            self.online = False
+            self.last_success_ts = None
+            self.last_analysis_ts = None
+
+    def _process_frame(self, frame: Frame) -> None:
+        with self._mode_lock:
+            if frame.ts < self._mode_since_ts:
+                return
+            generation = self._mode_generation
+            mode = mode_name(self.person_test_mode)
+        try:
+            result = self._analyze(frame)
+            with self._mode_lock:
+                if generation != self._mode_generation:
+                    return
+                result["observation_mode"] = mode
+                if self.person_test_mode and result.get("activity") == "sleeping":
+                    result["activity"] = "unknown"
+                    result["confidence"] = 0.0
+                    result["reason"] = "成人闭眼静止不足以确认真实睡眠"
+                self.online = True
+                self.last_error = None
+                self.last_result = result
+                self.last_analysis_ts = time.time()
+                self.last_success_ts = self.last_analysis_ts
+                self._apply(result)
+                if self.record_transitions:
+                    self.on_classification(result)
+        except Exception as exc:
+            with self._mode_lock:
+                if generation != self._mode_generation:
+                    return
+                self.online = False
+                self.last_error = f"轻量识别失败: {exc}"[:300]
+                self.last_analysis_ts = time.time()
 
     @property
     def components(self) -> dict[str, dict[str, Any]]:
@@ -291,19 +361,9 @@ class InferenceWorker:
             if not self._should_analyze():
                 continue
             frame = self.camera.sharpest_recent(2)
-            if frame is None:
+            if frame is None or time.time() - frame.ts > 2.0:
                 continue
-            try:
-                result = self._analyze(frame)
-                self.online = True
-                self.last_error = None
-                self.last_result = result
-                self.last_analysis_ts = time.time()
-                self._apply(result)
-                self.on_classification(result)
-            except Exception as exc:
-                self.last_error = f"轻量识别失败: {exc}"[:300]
-                self.last_analysis_ts = time.time()
+            self._process_frame(frame)
 
     def _detect_face(self, bgr: np.ndarray) -> tuple[np.ndarray | None, int]:
         cv2 = self._cv2
@@ -441,6 +501,8 @@ class InferenceWorker:
                     "个体化睡姿小模型",
                 )
 
+        if not self.record_transitions:
+            return  # Qwen-primary: reference output cannot save photos or alter records.
         self._smile_votes.append((now, bool(result["smile"]), result["happiness_score"]))
         recent_positive = [
             confidence

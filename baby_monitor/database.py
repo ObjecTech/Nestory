@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .observation_mode import validate_mode, mode_from_metadata
+
 
 ACTIVITY_VALUES = {
     "sleeping",
@@ -30,8 +32,9 @@ PRESENCE_VALUES = {"visible", "not_visible", "unknown"}
 
 
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, observation_mode: str = "infant"):
         self.path = path
+        self.observation_mode = validate_mode(observation_mode)
         self._lock = threading.RLock()
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
@@ -115,9 +118,56 @@ class Database:
                     self._connection.execute(
                         f"ALTER TABLE observations ADD COLUMN {name} REAL"
                     )
+            self._migrate_modes()
+        self.activate_mode(self.observation_mode, reset=False)
         self.ensure_open_interval("activity", "unknown", "system")
         self.ensure_open_interval("posture", "unknown", "system")
         self.ensure_open_interval("presence", "unknown", "system")
+
+    def _migrate_modes(self) -> None:
+        # Migration runs in the schema transaction, once per table. No files or
+        # rows are removed; only explicit legacy evidence is classified.
+        for table in ("intervals", "events", "observations"):
+            columns = {row["name"] for row in self._connection.execute(f"PRAGMA table_info({table})")}
+            if "observation_mode" in columns:
+                continue
+            self._connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN observation_mode TEXT NOT NULL DEFAULT 'legacy_unknown'"
+            )
+            rows = self._connection.execute(f"SELECT * FROM {table}").fetchall()
+            for row in rows:
+                mode = ("adult_test" if table == "intervals" and
+                        (row["note"] or "").startswith("[成人测试]") else
+                        mode_from_metadata(row["metadata_json"]) if table != "intervals" else
+                        "legacy_unknown")
+                self._connection.execute(f"UPDATE {table} SET observation_mode=? WHERE id=?", (mode, row["id"]))
+            self._connection.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_mode ON {table}(observation_mode)")
+
+    def activate_mode(self, mode: str, reset: bool = True, now: float | None = None) -> None:
+        mode = validate_mode(mode)
+        now = time.time() if now is None else now
+        with self._lock, self._connection:
+            rows = self._connection.execute("SELECT * FROM intervals WHERE end_ts IS NULL").fetchall()
+            if reset or any(row["observation_mode"] != mode for row in rows):
+                self._connection.execute("UPDATE intervals SET end_ts=? WHERE end_ts IS NULL", (now,))
+                for category in ("activity", "posture", "presence"):
+                    self._connection.execute(
+                        "INSERT INTO intervals(category,value,start_ts,source,note,observation_mode) VALUES(?,?,?,?,?,?)",
+                        (category, "unknown", now, "system", "观察模式重新确认", mode),
+                    )
+            self.observation_mode = mode
+
+    def _metadata(self, raw: str | None, mode: str) -> str:
+        try:
+            data = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            data = {"legacy_metadata": raw}
+        if not isinstance(data, dict):
+            data = {"legacy_metadata": data}
+        data["observation_mode"] = mode
+        if mode != "legacy_unknown":
+            data["person_test_mode"] = mode == "adult_test"
+        return json.dumps(data, ensure_ascii=False)
 
     def ensure_open_interval(self, category: str, value: str, source: str) -> None:
         with self._lock, self._connection:
@@ -127,8 +177,8 @@ class Database:
             ).fetchone()
             if row is None:
                 self._connection.execute(
-                    "INSERT INTO intervals(category, value, start_ts, source) VALUES(?, ?, ?, ?)",
-                    (category, value, time.time(), source),
+                    "INSERT INTO intervals(category, value, start_ts, source, observation_mode) VALUES(?, ?, ?, ?, ?)",
+                    (category, value, time.time(), source, self.observation_mode),
                 )
 
     def current(self) -> dict[str, dict[str, Any]]:
@@ -165,7 +215,7 @@ class Database:
                 (category,),
             ).fetchone()
             previous = current["value"] if current else "unknown"
-            if current and previous == value:
+            if current and previous == value and current["observation_mode"] == self.observation_mode:
                 self._connection.execute(
                     "UPDATE intervals SET confidence = COALESCE(?, confidence), note = COALESCE(?, note) WHERE id = ?",
                     (confidence, note, current["id"]),
@@ -177,22 +227,25 @@ class Database:
                 )
             self._connection.execute(
                 """
-                INSERT INTO intervals(category, value, start_ts, source, confidence, note)
-                VALUES(?, ?, ?, ?, ?, ?)
+                INSERT INTO intervals(category, value, start_ts, source, confidence, note, observation_mode)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
                 """,
-                (category, value, now, source, confidence, note),
+                (category, value, now, source, confidence, note, self.observation_mode),
             )
         return True, previous
 
-    def intervals(self, start_ts: float, end_ts: float) -> list[dict[str, Any]]:
+    def intervals(self, start_ts: float, end_ts: float, observation_mode: str | None = None) -> list[dict[str, Any]]:
+        if observation_mode is not None:
+            validate_mode(observation_mode)
         with self._lock:
             rows = self._connection.execute(
                 """
                 SELECT * FROM intervals
                 WHERE start_ts < ? AND COALESCE(end_ts, ?) > ?
+                  AND (? IS NULL OR observation_mode = ?)
                 ORDER BY start_ts ASC
                 """,
-                (end_ts, time.time(), start_ts),
+                (end_ts, time.time(), start_ts, observation_mode, observation_mode),
             ).fetchall()
         result = []
         now = time.time()
@@ -226,8 +279,8 @@ class Database:
                 """
                 INSERT INTO events(
                     event_type, ts, activity, posture, confidence,
-                    original_path, thumbnail_path, metadata_json
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    original_path, thumbnail_path, metadata_json, observation_mode
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_type,
@@ -237,7 +290,8 @@ class Database:
                     confidence,
                     original_path,
                     thumbnail_path,
-                    metadata_json,
+                    self._metadata(metadata_json, self.observation_mode),
+                    self.observation_mode,
                 ),
             )
             return int(cursor.lastrowid)
@@ -258,8 +312,8 @@ class Database:
                     ts, source, baby_visible, visibility, sleep_state, posture,
                     expression, activity_level, confidence, expression_confidence,
                     posture_confidence, visibility_confidence, suggested_state,
-                    description, observed_actions_json, metadata_json
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    description, observed_actions_json, metadata_json, observation_mode
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ts,
@@ -277,7 +331,8 @@ class Database:
                     observation.get("suggested_state"),
                     observation.get("description"),
                     json.dumps(observation.get("observed_actions", []), ensure_ascii=False),
-                    metadata_json,
+                    self._metadata(metadata_json, self.observation_mode),
+                    self.observation_mode,
                 ),
             )
             return int(cursor.lastrowid)
@@ -287,9 +342,13 @@ class Database:
         limit: int = 100,
         start_ts: float | None = None,
         end_ts: float | None = None,
+        observation_mode: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses = []
-        parameters: list[Any] = []
+        if observation_mode is not None:
+            validate_mode(observation_mode)
+            clauses.append("observation_mode = ?")
+        parameters: list[Any] = [observation_mode] if observation_mode is not None else []
         if start_ts is not None:
             clauses.append("ts >= ?")
             parameters.append(start_ts)
@@ -379,7 +438,10 @@ class Database:
         start_ts: float,
         end_ts: float,
         group_by: str = "activity",
+        observation_mode: str | None = None,
     ) -> dict[str, int]:
+        if observation_mode is not None:
+            validate_mode(observation_mode)
         if group_by not in {"activity", "posture"}:
             raise ValueError("unsupported event count group")
         with self._lock:
@@ -388,18 +450,19 @@ class Database:
                 SELECT COALESCE({group_by}, '') AS category_value, COUNT(*) AS count
                 FROM events
                 WHERE event_type = ? AND ts >= ? AND ts < ?
+                  AND (? IS NULL OR observation_mode = ?)
                 GROUP BY {group_by}
                 """,
-                (event_type, start_ts, end_ts),
+                (event_type, start_ts, end_ts, observation_mode, observation_mode),
             ).fetchall()
         return {str(row["category_value"]): int(row["count"]) for row in rows}
 
-    def event_count(self, event_type: str, start_ts: float, end_ts: float) -> int:
+    def event_count(self, event_type: str, start_ts: float, end_ts: float, observation_mode: str | None = None) -> int:
         with self._lock:
             row = self._connection.execute(
                 "SELECT COUNT(*) AS count FROM events "
-                "WHERE event_type = ? AND ts >= ? AND ts < ?",
-                (event_type, start_ts, end_ts),
+                "WHERE event_type = ? AND ts >= ? AND ts < ? AND (? IS NULL OR observation_mode = ?)",
+                (event_type, start_ts, end_ts, observation_mode, observation_mode),
             ).fetchone()
         return int(row["count"] if row is not None else 0)
 

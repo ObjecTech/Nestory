@@ -334,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             start_ts = day.timestamp()
             end_ts = (day + timedelta(days=1)).timestamp()
-            self._json({"date": date_text, **self.app.timeline(start_ts, end_ts)})
+            self._json({"date": date_text, **self.app.timeline(start_ts, end_ts, query.get("mode", ["infant"])[0])})
         elif path == "/api/smiles":
             query = parse_qs(parsed.query)
             self._json({"items": self.app.smile_events(int(query.get("limit", ["100"])[0]))})
@@ -360,6 +360,7 @@ class Handler(BaseHTTPRequestHandler):
                         int(query.get("limit", ["100"])[0]),
                         start_ts,
                         end_ts,
+                        query.get("mode", ["infant"])[0],
                     )
                 }
             )
