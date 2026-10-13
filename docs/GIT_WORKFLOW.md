@@ -82,21 +82,14 @@ Mac、Jetson 工作副本及共享仓库的 `main` 提交 ID 应一致。
 Git 仓库中的 `.env`、虚拟环境、权重、照片、数据库和缓存均被忽略；
 这些运行配置和数据需要各自准备或另行备份。
 
-## 之后接入 GitHub 私有仓库
+## 公开 GitHub 发布工作流 (Public Release)
 
-创建空的 GitHub 私有仓库后，可先保留当前 SSH 同步链路，另加远程：
+公开仓库位于：`https://github.com/ObjecTech/Nestory`
 
-```bash
-git remote add github <GitHub私有仓库地址>
-git push -u github main
-git branch --set-upstream-to=origin/main main
-```
-
-之后用 `git push github main` 将新提交备份到 GitHub。
-推送到 `origin` 不会自动推送到 `github`；如果以后改用 GitHub 作为主要
-共享仓库，需要同时调整两端远程地址和同步脚本。
-当前没有异地云备份：Jetson 关机或 SSH 不通时，Mac 仍可本地编辑和提交，
-但需要恢复连接后才能同步。
+该仓库向公众开源，必须严格保证不泄露任何私有网络拓扑、账号密码、模型权重、运行数据库及私人媒体文件：
+1. **脱敏发布机制**：发布由辅助工程师（Gemini）独立负责，推送前必须运行 `python3 scripts/scan-release.py` 执行安全扫描。
+2. **独立发布历史**：GitHub 公开分支作为脱敏发布目标，其提交历史与 SHA 允许独立于内部开发仓库，发布时采用干净的脱敏工作树提交，严禁强制推送（`--force`）。
+3. **日常同步边界**：Mac 与 Jetson 内部日常开发仍严格使用 `bash scripts/sync-jetson.sh` 保持 SSH 裸仓库原子同步，不直接从开发环境自动推送到外部 GitHub。
 
 ## 初次双向验证记录
 
