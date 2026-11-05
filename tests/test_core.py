@@ -18,7 +18,12 @@ from baby_monitor.app import BabyMonitorApp
 from baby_monitor.camera import Frame
 from baby_monitor.database import Database
 from baby_monitor.inference import TemporalStateFilter, classify_activity
-from baby_monitor.play_with_me import MediaTrack, PlayWithMePlayer, _display_title
+from baby_monitor.play_with_me import (
+    MediaTrack,
+    PlayWithMePlayer,
+    _display_title,
+    parse_gst_duration,
+)
 from baby_monitor.voice_control import (
     VoiceControl,
     is_within_listen_schedule,
@@ -645,6 +650,60 @@ class PlayWithMePlayerTest(unittest.TestCase):
             self.assertEqual(args[args.index("--file") + 1], str(source))
             player.close()
 
+    def test_pulse_backend_uses_system_python_and_speaker_mac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "test.mp3"
+            source.write_bytes(b"audio")
+            track = MediaTrack("测试", source, source, "测试音频", "test", True, False)
+            player = PlayWithMePlayer(
+                media_root=root,
+                player_python=root / "missing-python",
+                speaker_host="",
+                playback_backend="pulse",
+                bluetooth_speaker_mac="AA:BB:CC",
+                pulse_python=Path("/usr/bin/python3"),
+                start_converter=False,
+            )
+            args = player._worker_args(track, 12.5)
+            self.assertEqual(args[0], "/usr/bin/python3")
+            self.assertIn("baby_monitor.pulse_audio_worker", args)
+            self.assertEqual(args[args.index("--bluetooth-mac") + 1], "AA:BB:CC")
+            self.assertEqual(args[args.index("--start-seconds") + 1], "12.5")
+            player.close()
+
+    def test_pulse_backend_requires_speaker_mac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "test.mp3"
+            source.write_bytes(b"audio")
+            track = MediaTrack("测试", source, source, "测试音频", "test", True, False)
+            player = PlayWithMePlayer(
+                media_root=root,
+                player_python=root / "missing-python",
+                speaker_host="",
+                playback_backend="pulse",
+                start_converter=False,
+            )
+            with self.assertRaises(RuntimeError):
+                player._worker_args(track)
+            player.close()
+
+    def test_gstreamer_duration_parsing(self):
+        self.assertAlmostEqual(
+            parse_gst_duration("  Duration: 0:03:25.480000000\n  Seekable: yes"), 205.48
+        )
+        self.assertEqual(parse_gst_duration("Duration: 1:00:00.000000000"), 3600.0)
+        self.assertEqual(parse_gst_duration("no duration here"), 0.0)
+
+    def test_pulse_sink_names(self):
+        from baby_monitor.pulse_audio_worker import card_name, sink_name
+
+        self.assertEqual(
+            sink_name("AA:BB:CC"), "bluez_sink.AA_BB_CC.a2dp_sink"
+        )
+        self.assertEqual(card_name("AA:BB:CC"), "bluez_card.AA_BB_CC")
+
 
 class VoiceControlTest(unittest.TestCase):
     CATEGORIES = ["古诗词", "经典儿歌", "英文歌曲", "法语儿歌", "钢琴曲"]
@@ -666,19 +725,19 @@ class VoiceControlTest(unittest.TestCase):
     def test_wake_word_and_category_are_parsed(self):
         self.assertEqual(
             parse_voice_command(
-                "八戒，播放古诗词",
+                "佩奇，播放古诗词",
                 self.CATEGORIES,
                 require_wake=True,
             ),
             {"type": "category", "value": "古诗词"},
         )
         self.assertEqual(
-            parse_voice_command("八戒八戒", self.CATEGORIES, require_wake=True),
-            {"type": "wake", "value": "八戒"},
+            parse_voice_command("佩奇佩奇", self.CATEGORIES, require_wake=True),
+            {"type": "wake", "value": "佩奇"},
         )
         self.assertEqual(
             parse_voice_command(
-                "八戒八戒提高音量",
+                "佩奇佩奇提高音量",
                 self.CATEGORIES,
                 require_wake=True,
             ),
@@ -694,7 +753,7 @@ class VoiceControlTest(unittest.TestCase):
             "唱一首歌": "经典儿歌",
             "放首英文歌": "英文歌曲",
             "播放英文儿歌": "英文歌曲",
-            "戒播八戒八戒播放英文儿歌嗯嗯": "英文歌曲",
+            "奇播佩奇佩奇播放英文儿歌嗯嗯": "英文歌曲",
             "播放法语儿歌": "法语儿歌",
             "来首法文歌": "法语儿歌",
             "听法国儿歌": "法语儿歌",
@@ -868,7 +927,7 @@ class VoiceControlTest(unittest.TestCase):
                 keywords_file=root / "missing-keywords",
                 audio_device="plughw:0,0",
             )
-            result = voice.execute_phrase("八戒播放英文歌曲", require_wake=True)
+            result = voice.execute_phrase("佩奇播放英文歌曲", require_wake=True)
             self.assertEqual(player.calls, [("category", "英文歌曲")])
             self.assertEqual(result["message"], "开始随机播放英文歌曲")
             voice.close()
@@ -906,6 +965,7 @@ class VoiceControlTest(unittest.TestCase):
                 keywords_file=root / "missing-keywords",
                 audio_device="plughw:0,0",
                 feedback_dir=feedback_dir,
+                default_enabled=True,
                 now_factory=lambda: datetime(2026, 8, 24, 12, 0),
             )
 

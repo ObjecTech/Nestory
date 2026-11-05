@@ -20,6 +20,7 @@ training_data/
 training/
 *.db
 *.db-*
+*.db.lock
 *.sqlite*
 # Weights and serialized models
 models/
@@ -46,3 +47,7 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+.playwright-cli/
+output/playwright/
+# Local agent notes (may hold private details)
+CLAUDE.local.md

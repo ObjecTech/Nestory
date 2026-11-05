@@ -24,6 +24,12 @@ POSTURE_VALUES = {
 }
 EXPRESSION_VALUES = {"calm", "happy", "unhappy", "crying", "neutral", "unknown"}
 ACTIVITY_LEVEL_VALUES = {"still", "low", "active", "unknown"}
+# Light must rise this far above the threshold before analysis resumes, so a
+# room hovering near the limit does not flap in and out of low-light mode.
+LOW_LIGHT_HYSTERESIS = 10.0
+LOW_LIGHT_NOTE = "光线不足，暂停视觉分析"
+# Darkness must last this long before the displayed state is cleared.
+LOW_LIGHT_SECONDS = 30.0
 
 
 def _enum(value: Any, allowed: set[str]) -> str:
@@ -245,6 +251,7 @@ class VLMObserver:
         on_expression: Callable[[str, float, str, Frame], Any] | None = None,
         person_test_mode: bool = False,
         mode_lock=None,
+        min_brightness: float = 0.0,
     ):
         self.camera = camera
         self._mode_lock = mode_lock or threading.RLock()
@@ -262,6 +269,12 @@ class VLMObserver:
         self.confidence_threshold = confidence_threshold
         self.stable_seconds = stable_seconds
         self.motion_threshold = motion_threshold
+        # The camera has no night vision: dark frames are skipped instead of
+        # being sent to the model, and the gap is shown as unknown coverage.
+        self.min_brightness = min_brightness
+        self.low_light = False
+        self.low_light_since: float | None = None
+        self._dark_since: float | None = None
         self.on_transition = on_transition
         self.on_observation = on_observation
         self.on_expression = on_expression
@@ -318,6 +331,9 @@ class VLMObserver:
             "last_analysis_ts": self.last_analysis_ts,
             "last_success_ts": self.last_success_ts,
             "observation_mode": mode_name(self.person_test_mode),
+            "low_light": self.low_light,
+            "low_light_since": self.low_light_since,
+            "min_brightness": self.min_brightness,
         }
 
     def start(self) -> None:
@@ -601,14 +617,44 @@ class VLMObserver:
                 self.last_error = f"Qwen 观察失败: {exc}"[:300]
                 # last_success_ts and last_result remain inspectable as history.
 
+    def _too_dark(self, frame: Frame) -> bool:
+        if self.min_brightness <= 0 or frame.brightness is None:
+            return False
+        limit = self.min_brightness + (LOW_LIGHT_HYSTERESIS if self.low_light else 0.0)
+        return frame.brightness < limit
+
+    def _update_light(self, frame: Frame) -> bool:
+        """Track darkness; return True when the frame may be analyzed."""
+        now = time.time()
+        with self._mode_lock:
+            if not self._too_dark(frame):
+                self._dark_since = None
+                self.low_light = False
+                self.low_light_since = None
+                return True
+            if self._dark_since is None:
+                self._dark_since = now
+            # A brief shadow only skips analysis; sustained darkness clears the
+            # displayed state so an old "sleeping" never runs on through the night.
+            if self.low_light or now - self._dark_since < LOW_LIGHT_SECONDS:
+                return False
+            self.low_light = True
+            self.low_light_since = self._dark_since
+            self._filter = ObservationFilter()
+            self._observation_candidate = None
+            for category in ("activity", "posture", "presence"):
+                if self.database.current().get(category, {}).get("value", "unknown") != "unknown":
+                    self.on_transition(category, "unknown", "qwen3-vl-2b", 0.0, LOW_LIGHT_NOTE, None)
+            return False
+
     def _run(self) -> None:
         while not self._stop.wait(1.0):
             if not self.camera.online:
                 continue
             with self._mode_lock:
-                if self.last_analysis_ts is not None:
+                if self.last_analysis_ts is not None and not self.low_light:
                     if time.time() - self.last_analysis_ts < self._next_interval():
                         continue
             frame = self.camera.sharpest_recent(3)
-            if frame is not None and time.time() - frame.ts <= 3.0:
+            if frame is not None and time.time() - frame.ts <= 3.0 and self._update_light(frame):
                 self._observe_frame(frame)

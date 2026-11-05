@@ -17,6 +17,8 @@ class Frame:
     ts: float
     jpeg: bytes
     sharpness: float
+    # Mean luminance 0-255 of the downscaled frame; None when not sampled.
+    brightness: float | None = None
 
 
 class Camera:
@@ -33,6 +35,7 @@ class Camera:
         self._compatible_cache_ts = 0.0
         self._compatible_cache_jpeg: bytes | None = None
         self.motion_score = 0.0
+        self.brightness: float | None = None
         self._motion_scores: deque[float] = deque(maxlen=3)
         self.online = False
         self.error: str | None = None
@@ -83,11 +86,14 @@ class Camera:
             sample_motion = now - self._last_analysis_ts >= 0.8
         gray = self._gray_small(jpeg) if sample_frame or sample_motion else None
         sharpness = self._sharpness(gray) if gray is not None and sample_frame else 0.0
-        frame = Frame(now, jpeg, sharpness)
+        brightness = float(gray.mean()) if gray is not None and sample_frame else None
+        frame = Frame(now, jpeg, sharpness, brightness)
         with self._condition:
             self._latest = frame
             if sample_frame:
                 self._ring.append(frame)
+                if brightness is not None:
+                    self.brightness = brightness
             if sample_motion and gray is not None:
                 if self._last_analysis_gray is not None:
                     delta = gray - self._last_analysis_gray

@@ -63,6 +63,45 @@ def _decode_segment(recognizer, samples) -> str:
     return str(stream.result.text).strip()
 
 
+CRY_LABELS = ("Baby cry, infant cry", "Crying, sobbing")
+
+
+def _create_tagger(model_dir: Path):
+    config = sherpa_onnx.AudioTaggingConfig(
+        model=sherpa_onnx.AudioTaggingModelConfig(
+            zipformer=sherpa_onnx.OfflineZipformerAudioTaggingModelConfig(
+                model=str(model_dir / "model.int8.onnx")
+            ),
+            num_threads=1,
+            provider="cpu",
+        ),
+        labels=str(model_dir / "class_labels_indices.csv"),
+        top_k=10,
+    )
+    return sherpa_onnx.AudioTagging(config)
+
+
+class _CryScorer:
+    """Score the latest two seconds of audio once per second. Audio is never kept."""
+
+    def __init__(self, tagger, window: int = 32000, hop: int = 16000):
+        self.tagger, self.window, self.hop = tagger, window, hop
+        self.buffer = np.zeros(0, dtype=np.float32)
+        self.pending = 0
+
+    def feed(self, samples) -> None:
+        self.buffer = np.concatenate((self.buffer, samples))[-self.window:]
+        self.pending += samples.size
+        if self.pending < self.hop or self.buffer.size < self.window:
+            return
+        self.pending = 0
+        stream = self.tagger.create_stream()
+        stream.accept_waveform(16000, self.buffer)
+        events = self.tagger.compute(stream, 10)
+        score = max((float(e.prob) for e in events if e.name in CRY_LABELS), default=0.0)
+        _emit("cry", score=round(score, 3))
+
+
 def _run(args: argparse.Namespace) -> int:
     accepted_wake_words = tuple(dict.fromkeys((args.wake_word, *args.wake_word_alias)))
     normalized_wake_words = {_normalized_phrase(item) for item in accepted_wake_words}
@@ -79,6 +118,7 @@ def _run(args: argparse.Namespace) -> int:
     )
     recognizer = _create_asr(args.asr_model_dir)
     vad = _create_vad(args.vad_model, args.command_window)
+    cry_scorer = _CryScorer(_create_tagger(args.tagging_model_dir)) if args.tagging_model_dir else None
     vad_window = int(vad.config.silero_vad.window_size)
     recorder = subprocess.Popen(
         [
@@ -148,6 +188,8 @@ def _run(args: argparse.Namespace) -> int:
                 _emit("microphone_error", error=detail or "麦克风音频流已中断")
                 return 2
             samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            if cry_scorer is not None:
+                cry_scorer.feed(samples)
             now = time.monotonic()
             if listening_until:
                 vad_pending = np.concatenate((vad_pending, samples))
@@ -176,7 +218,7 @@ def _run(args: argparse.Namespace) -> int:
                     continue
                 vad.reset()
                 # The wake word and the first command syllable can share the same
-                # 100 ms recorder chunk (for example, "八戒小点声音").  Reuse that
+                # 100 ms recorder chunk (for example, "佩奇小点声音").  Reuse that
                 # chunk as command audio so switching from KWS to ASR does not
                 # discard the beginning of the command.  A lone wake-word tail is
                 # shorter than VAD's minimum speech duration and is ignored when
@@ -200,9 +242,10 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--asr-model-dir", type=Path, required=True)
     parser.add_argument("--vad-model", type=Path, required=True)
     parser.add_argument("--device", default="plughw:0,0")
-    parser.add_argument("--wake-word", default="八戒")
+    parser.add_argument("--wake-word", default="佩奇")
     parser.add_argument("--wake-word-alias", action="append", default=[])
-    parser.add_argument("--command-window", type=float, default=6.0)
+    parser.add_argument("--command-window", type=float, default=8.0)
+    parser.add_argument("--tagging-model-dir", type=Path, help="Audio tagging model for cry detection")
     args = parser.parse_args()
     if not args.model_dir.is_dir():
         parser.error("voice model directory does not exist")

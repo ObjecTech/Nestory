@@ -123,6 +123,12 @@ class Database:
         self.ensure_open_interval("activity", "unknown", "system")
         self.ensure_open_interval("posture", "unknown", "system")
         self.ensure_open_interval("presence", "unknown", "system")
+        # A crying period left open by a crash or power loss has no known end.
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE intervals SET end_ts = start_ts + 1, note = '结束时间未知（服务中断）' "
+                "WHERE category = 'cry' AND end_ts IS NULL"
+            )
 
     def _migrate_modes(self) -> None:
         # Migration runs in the schema transaction, once per table. No files or
@@ -180,6 +186,26 @@ class Database:
                     "INSERT INTO intervals(category, value, start_ts, source, observation_mode) VALUES(?, ?, ?, ?, ?)",
                     (category, value, time.time(), source, self.observation_mode),
                 )
+
+    def start_cry(self, start_ts: float, confidence: float) -> int:
+        """Open a crying period detected from audio; returns its interval id."""
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE intervals SET end_ts = ? WHERE category = 'cry' AND end_ts IS NULL", (start_ts,)
+            )
+            cursor = self._connection.execute(
+                "INSERT INTO intervals(category, value, start_ts, source, confidence, note, observation_mode) "
+                "VALUES('cry', 'crying', ?, 'audio', ?, '麦克风识别到哭声', ?)",
+                (start_ts, round(confidence, 3), self.observation_mode),
+            )
+            return int(cursor.lastrowid)
+
+    def end_cry(self, interval_id: int, end_ts: float, peak: float) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE intervals SET end_ts = MAX(start_ts, ?), confidence = ? WHERE id = ? AND category = 'cry' AND end_ts IS NULL",
+                (end_ts, round(peak, 3), interval_id),
+            )
 
     def current(self) -> dict[str, dict[str, Any]]:
         with self._lock:

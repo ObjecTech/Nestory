@@ -90,8 +90,8 @@ The worker needs PyTorch, Transformers, Accelerate and Pillow compatible with th
 JetPack/CUDA stack. Those GPU versions are intentionally not claimed to be universally portable.
 
 For optional audio, see `docs/AUDIO.md`. All media and weights are provisioned separately.
-An example **user** service is in `deploy/baby-monitor.service`; adapt its generic checkout
-location before installing. No device disks, UUIDs, accounts or system services are modified
+Example **user** services are in `deploy/nestory-model.service` and `deploy/nestory-app.service`;
+see `docs/DEPLOY.md` for the release-snapshot layout they expect. No device disks, UUIDs, accounts or system services are modified
 by this repository's setup instructions.
 
 ## Remote access and security

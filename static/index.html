@@ -7,44 +7,38 @@
   <meta name="bmon-access-mode" content="local">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <title>Edge AI Monitor</title>
+  <title>Nestory</title>
+  <meta name="apple-mobile-web-app-title" content="Nestory">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="stylesheet" href="/app.css?v=6">
+  <link rel="stylesheet" href="/app.css?v=14">
+  <link rel="stylesheet" href="/assistant.css?v=11">
+  <link rel="stylesheet" href="/play.css?v=3">
+  <link rel="stylesheet" href="/timeline.css?v=5">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow" id="accessEyebrow">EDGE AI RESEARCH MONITOR</p>
-        <h1>Edge AI Monitor</h1>
+        <p class="eyebrow" id="accessEyebrow">NEST · STORY</p>
+        <h1 class="brand-title"><img class="brand-mark" src="/assets/icons/icon-192.png" alt="">Nestory</h1>
       </div>
       <div class="connection-pill" id="connectionPill"><i></i><span>正在连接</span></div>
     </header>
 
-    <p id="personTestBanner" class="notice-card" hidden>TEST MODE · 成人测试：当前观察画面中的人，结果仅用于工程验证。</p>
     <main>
       <section class="page active" data-page="monitor">
-        <article class="hero-state" id="heroState">
-          <div class="hero-photo" id="heroPhoto"></div>
-          <div class="hero-gradient"></div>
-          <div class="hero-copy">
-            <span class="status-chip" id="activityChip">正在检测</span>
-            <h2 id="activityTitle">等待摄像头画面</h2>
-            <p id="activityDuration">—</p>
-          </div>
-        </article>
-
-        <article class="camera-card">
-          <div class="section-heading">
-            <div>
-              <span class="section-kicker">实时画面</span>
-              <strong id="cameraResolution">1280×720</strong>
-            </div>
-            <span class="live-badge" id="cameraLiveBadge"><i></i><span>LIVE</span></span>
-          </div>
+        <div class="cry-alert-banner" id="cryAlertBanner" hidden></div>
+        <article class="camera-card" aria-label="实时监控画面">
           <div class="camera-frame">
-            <img id="cameraStream" src="/snapshot.jpg" alt="Edge AI Monitor实时画面">
+            <img id="cameraStream" src="/snapshot.jpg" alt="Nestory 实时画面">
+            <div class="camera-gradient" aria-hidden="true"></div>
+            <span class="live-badge" id="cameraLiveBadge"><i></i><span>LIVE</span></span>
+            <div class="camera-copy">
+              <span class="status-chip" id="activityChip">正在检测</span>
+              <h2 id="activityTitle">等待摄像头画面</h2>
+              <p id="activityDuration">—</p>
+            </div>
             <div class="camera-offline" id="cameraOffline" hidden>
               <span>摄像头暂时不可用</span>
               <small id="cameraError"></small>
@@ -54,14 +48,19 @@
 
         <div class="status-grid">
           <article class="metric-card">
-            <span>睡眠姿势</span>
+            <span>睡姿</span>
             <strong id="postureTitle">检测中</strong>
             <small id="postureDuration">—</small>
           </article>
           <article class="metric-card">
-            <span>本地 AI</span>
+            <span>哭声</span>
+            <strong id="cryTitle">未开启</strong>
+            <small id="cryDetail">尚未开始监听</small>
+          </article>
+          <article class="metric-card">
+            <span>AI 识别</span>
             <strong id="modelTitle">等待启动</strong>
-            <small id="modelDetail">EmotiEffLib + 时间状态机</small>
+            <small id="modelDetail">本地运行，不上传</small>
           </article>
         </div>
 
@@ -126,36 +125,104 @@
           <div class="volume-control"><span>小</span><input id="playerVolume" type="range" min="0" max="60" step="1" value="25" aria-label="音响音量"><span>大</span></div>
           <small>为保护宝宝听力，页面最高设置为 60%。</small>
         </article>
+        <p class="player-notice-hint">“陪我玩”不会被睡眠、哭泣等监控状态自动触发，仅在手动选择时播放。</p>
 
-        <aside class="notice-card play-notice">
-          <strong>独立播放功能</strong>
-          <p>“陪我玩”不会被睡眠、哭泣或其他监控状态自动触发；只有在这个页面手动选择类目后才会播放。</p>
-        </aside>
+        <div class="play-interactions-section">
+          <div class="play-section-header">
+            <div class="play-section-title-wrap">
+              <h3>亲子互动与反应记录</h3>
+            </div>
+          </div>
+          <p class="play-section-intro">挑选手指操或感官游戏，腾出双手陪伴宝宝。互动结束后记录宝宝情绪反应，AI 会据此持续优化推荐。</p>
+
+          <div class="play-filter-tabs">
+            <button type="button" class="play-filter-btn active" data-filter="all">全部互动</button>
+            <button type="button" class="play-filter-btn" data-filter="finger_play">手指操</button>
+            <button type="button" class="play-filter-btn" data-filter="game">亲子游戏</button>
+            <button type="button" class="play-filter-btn" data-filter="sensory">感官探索</button>
+          </div>
+
+          <div class="play-activities-grid" id="playActivitiesGrid">
+            <div class="today-empty-tip">正在加载亲子互动库…</div>
+          </div>
+
+          <div class="today-interactions-box">
+            <div class="today-interactions-header">
+              <strong>今日互动记录</strong>
+            </div>
+            <div class="today-interactions-list" id="todayInteractionsList">
+              <div class="today-empty-tip">今天暂无互动记录</div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="page" data-page="records">
         <div class="page-title-row">
           <div><p class="eyebrow">DAILY RECORDS</p><h2>状态记录</h2></div>
-          <select id="recordMode" aria-label="记录观察模式"><option value="infant">婴幼儿记录</option><option value="adult_test">成人测试记录</option><option value="legacy_unknown">历史模式未知</option></select>
           <input type="date" id="recordDate">
         </div>
-        <div class="summary-grid">
-          <article><span>睡眠总时长</span><strong id="sleepTotal">—</strong></article>
-          <article><span>清醒总时长</span><strong id="awakeTotal">—</strong></article>
-        </div>
-        <article class="timeline-card">
-          <div class="section-heading"><strong>状态时间段</strong><span id="recordCount">0 条</span></div>
-          <div class="timeline-list" id="activityTimeline"></div>
+
+        <article class="summary-card" id="dailySummaryCard">
+          <div class="today-empty-tip">正在加载今日作息总结…</div>
         </article>
-        <article class="timeline-card">
-          <div class="section-heading"><strong>睡姿时间段</strong><span>持续记录</span></div>
-          <div class="timeline-list" id="postureTimeline"></div>
+
+        <article class="unified-timeline-card" id="unifiedTimelineCard">
+          <div class="today-empty-tip">正在加载全景时间线…</div>
         </article>
-        <article class="timeline-card">
-          <div class="section-heading"><strong>大模型观察</strong><span id="observationCount">0 条</span></div>
+
+        <details class="timeline-card observation-card" id="observationDetails">
+          <summary class="observation-summary-heading">
+            <strong>AI 观察日志 · <span id="observationCount">0 条</span></strong>
+            <span class="observation-toggle-arrow">▼</span>
+          </summary>
           <p class="observation-intro">保留模型看到的事实和自由描述；正式时间段只采用经过连续确认的结果。</p>
           <div class="observation-list" id="observationList"></div>
-        </article>
+        </details>
+      </section>
+
+      <section class="page" data-page="assistant" id="assistantPage">
+        <div class="assistant-page">
+          <header class="assistant-header">
+            <div class="assistant-header-left">
+              <button type="button" class="assistant-drawer-btn" id="assistantDrawerBtn" aria-label="对话历史">
+                <span>☰</span>
+                <span class="assistant-drawer-btn-label">会话</span>
+                <span class="assistant-conv-badge" id="assistantConvCountBadge">0</span>
+              </button>
+              <div class="assistant-title-area">
+                <h3 class="assistant-conv-title" id="assistantConvTitle">新对话</h3>
+                <button type="button" class="assistant-icon-btn" id="assistantRenameConvBtn" title="重命名会话" aria-label="重命名会话">✎</button>
+              </div>
+            </div>
+            <div class="assistant-header-right">
+              <button type="button" class="assistant-btn-text" id="assistantCareEventsBtn" title="生活记录管理" aria-label="生活记录管理"><span class="btn-icon">📋</span><span class="btn-text">记录</span></button>
+              <button type="button" class="assistant-icon-btn danger" id="assistantDeleteConvBtn" title="删除当前对话" aria-label="删除当前对话">🗑</button>
+              <button type="button" class="assistant-btn-primary" id="assistantNewConvBtn" title="新建对话" aria-label="新建对话"><span class="btn-icon">+</span><span class="btn-text">新对话</span></button>
+            </div>
+          </header>
+
+          <div class="assistant-banner-area">
+            <div class="assistant-notice-banner mock" id="assistantMockBanner" hidden>
+              <span><strong>MOCK 联调模式</strong>：显式开发测试：数据仅在内存中，未写入数据库，刷新即丢失。</span>
+            </div>
+          </div>
+
+          <div class="assistant-messages-area" id="assistantMessagesArea">
+            <!-- Messages rendered dynamically -->
+          </div>
+
+          <div class="assistant-input-bar">
+            <div class="assistant-input-box">
+              <textarea id="assistantInput" class="assistant-textarea" rows="1" placeholder="记一下喂奶、睡眠，或问个问题…" aria-label="输入消息"></textarea>
+              <button type="button" class="assistant-send-btn" id="assistantSendBtn" disabled aria-label="发送消息">↑</button>
+            </div>
+            <div class="assistant-input-hint">
+              <span id="assistantBusyIndicator" class="assistant-busy-indicator" hidden>✨ 消息已接受，正在排队或处理，可切换其他对话...</span>
+              <small>Shift+Enter 换行，Enter 发送</small>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="page" data-page="smiles">
@@ -167,15 +234,18 @@
         <div class="photo-filters" id="photoFilters" aria-label="照片分类">
           <button class="selected" data-photo-filter="all">全部</button>
           <button data-photo-filter="smile">笑脸</button>
-          <button data-photo-filter="expression:calm">表情·平静</button>
-          <button data-photo-filter="expression:happy">表情·开心</button>
-          <button data-photo-filter="expression:unhappy">表情·不开心</button>
-          <button data-photo-filter="expression:crying">表情·哭泣</button>
           <button data-photo-filter="sleeping">睡觉</button>
           <button data-photo-filter="awake">清醒</button>
-          <button data-photo-filter="supine">仰睡</button>
-          <button data-photo-filter="side">侧睡</button>
-          <button data-photo-filter="prone">趴睡</button>
+          <button type="button" class="photo-filter-more-btn" id="photoFilterMoreBtn">更多 ▾</button>
+          <span class="photo-filters-more" id="photoFiltersMore" hidden>
+            <button data-photo-filter="expression:calm">平静</button>
+            <button data-photo-filter="expression:happy">开心</button>
+            <button data-photo-filter="expression:unhappy">不开心</button>
+            <button data-photo-filter="expression:crying">哭泣</button>
+            <button data-photo-filter="supine">仰睡</button>
+            <button data-photo-filter="side">侧睡</button>
+            <button data-photo-filter="prone">趴睡</button>
+          </span>
         </div>
         <div class="smile-grid" id="smileGrid"></div>
         <div class="empty-state" id="smileEmpty" hidden>
@@ -184,19 +254,37 @@
       </section>
 
       <section class="page" data-page="settings">
-        <div class="page-title-row"><div><p class="eyebrow">SYSTEM</p><h2>设备状态</h2></div></div>
-        <div class="settings-list">
-          <article id="lanAccessSetting"><div><strong>监控访问</strong><small id="lanAccessDetail">仅已登录用户可查看监控</small></div><label class="access-switch" aria-label="监控访问"><input type="checkbox" id="lanAccessSwitch"><span></span></label></article>
-          <article><div><strong>成人测试模式</strong><small id="observationSubjectDetail">关闭：观察宝宝；开启：观察成人。切换会改变大模型 Qwen 的 Prompt，重新确认状态后开始计时。成人测试记录单独标记，婴幼儿统计不包含它；历史来源不明的数据保留为模式未知。</small></div><label class="access-switch" aria-label="成人测试模式"><input type="checkbox" id="observationSubjectSwitch"><span></span></label></article>
-          <article id="voiceControlSetting"><div><strong>语音控制音乐</strong><small id="voiceControlDetail">正在检查离线语音组件</small></div><label class="access-switch" aria-label="语音控制音乐"><input type="checkbox" id="voiceControlSwitch"><span></span></label></article>
-          <article id="voiceWakeSetting"><div><strong>语音唤醒词</strong><small id="voiceWakeDetail">每日 07:00–23:00 监听，唤醒后六秒内说出音乐指令</small></div><span id="voiceWakeBadge">八戒</span></article>
-          <article><div><strong>摄像头</strong><small id="cameraSetting">检测中</small></div><span id="cameraSettingBadge">—</span></article>
-          <article><div><strong>本地视觉模型</strong><small id="modelSetting">EmotiEffLib + 睡姿小模型</small></div><span id="modelSettingBadge">—</span></article>
-          <article><div><strong>照片存储</strong><small id="storageSetting">媒体存储</small></div><span id="storageSettingBadge">—</span></article>
-          <article><div><strong>数据隐私</strong><small id="privacyDetail">摄像头、记录和照片不离开授权网络</small></div><span class="good" id="privacyBadge">仅本地</span></article>
-          <article id="installAppSetting" hidden><div><strong>安装到主屏幕</strong><small>以独立 App 方式打开监控页面</small></div><button class="settings-action" id="installAppButton">安装</button></article>
-          <article id="remoteAccessSetting" hidden><div><strong>登录会话</strong><small>一小时会话，退出后立即撤销</small></div><button class="settings-action danger" id="logoutButton">退出</button></article>
+        <div class="page-title-row"><div><p class="eyebrow">SYSTEM</p><h2>系统设置</h2></div></div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">功能</div>
+          <div class="settings-list">
+            <article id="lanAccessSetting"><div><strong>监控访问</strong><small id="lanAccessDetail">仅已登录用户可查看监控</small></div><label class="access-switch" aria-label="监控访问"><input type="checkbox" id="lanAccessSwitch"><span></span></label></article>
+            <article><div><strong>成人测试模式</strong><small id="observationSubjectDetail">打开后观察画面里的成人，用于演示和调试；记录单独保存，不计入宝宝统计。</small></div><label class="access-switch" aria-label="成人测试模式"><input type="checkbox" id="observationSubjectSwitch"><span></span></label></article>
+            <article id="voiceControlSetting"><div><strong>语音控制音乐</strong><small id="voiceControlDetail">正在检查离线语音组件</small></div><label class="access-switch" aria-label="语音控制音乐"><input type="checkbox" id="voiceControlSwitch"><span></span></label></article>
+          </div>
         </div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">设备状态</div>
+          <div class="settings-list">
+            <article id="cryDetectionSetting"><div><strong>哭声识别</strong><small id="cryDetectionDetail">正在检查哭声识别</small></div><span id="cryDetectionBadge">—</span></article>
+            <article id="voiceWakeSetting"><div><strong>语音唤醒词</strong><small id="voiceWakeDetail">每日 07:00–23:00 监听，唤醒后八秒内说出指令；可以控制音乐，也可以说“记一下……”来记录</small></div><span id="voiceWakeBadge">佩奇</span></article>
+            <article><div><strong>摄像头</strong><small id="cameraSetting">检测中</small></div><span id="cameraSettingBadge">—</span></article>
+            <article><div><strong>本地视觉模型</strong><small id="modelSetting">本地运行，画面不上传</small></div><span id="modelSettingBadge">—</span></article>
+            <article><div><strong>照片存储</strong><small id="storageSetting">媒体存储</small></div><span id="storageSettingBadge">—</span></article>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">账号与隐私</div>
+          <div class="settings-list">
+            <article><div><strong>数据隐私</strong><small id="privacyDetail">摄像头、记录和照片不离开授权网络</small></div><span class="good" id="privacyBadge">仅本地</span></article>
+            <article id="installAppSetting" hidden><div><strong>安装到主屏幕</strong><small>以独立 App 方式打开监控页面</small></div><button class="settings-action" id="installAppButton">安装</button></article>
+            <article id="remoteAccessSetting" hidden><div><strong>登录会话</strong><small>一小时会话，退出后立即撤销</small></div><button class="settings-action danger" id="logoutButton">退出</button></article>
+          </div>
+        </div>
+
         <aside class="notice-card">
           <strong>辅助提醒说明</strong>
           <p>AI 识别可能出现误判或漏报，本系统不能替代成人看护，也不是医疗级生命体征设备。</p>
@@ -205,23 +293,153 @@
     </main>
 
     <nav class="bottom-nav" aria-label="主导航">
-      <button class="active" data-target="monitor"><img src="/assets/nav/monitor.jpg" alt="">监控</button>
-      <button id="playNavButton" data-target="play"><img src="/assets/nav/play.png" alt="">陪我玩</button>
-      <button data-target="records"><img src="/assets/nav/records.jpg" alt="">记录</button>
-      <button data-target="smiles"><img src="/assets/nav/collection.jpg" alt="">收藏</button>
-      <button data-target="settings"><img src="/assets/nav/settings.jpg" alt="">设置</button>
+      <button class="active" data-target="monitor"><span class="nav-tile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12.5" rx="3.5"/><circle cx="12" cy="12.25" r="3.2"/><path d="M8 6l1.4-2.2h5.2L16 6"/></svg></span>监控</button>
+      <button id="playNavButton" data-target="play"><span class="nav-tile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 17.5V6.2l9-2v11"/><circle cx="7" cy="17.5" r="2.5"/><circle cx="16" cy="15.2" r="2.5"/></svg></span>陪我玩</button>
+      <button data-target="records"><span class="nav-tile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4.5" width="16" height="16" rx="3.5"/><path d="M4 9.5h16M8.5 3v3M15.5 3v3M8 13.5h3M8 16.8h6"/></svg></span>记录</button>
+      <button data-target="assistant" id="assistantNavButton"><span class="nav-tile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5l.8-3.2A7.3 7.3 0 1 1 9 18.6z"/><path d="M12.5 8.2l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg></span>AI 助手</button>
+      <button data-target="smiles"><span class="nav-tile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19.5s-7-4.3-7-9.4A3.9 3.9 0 0 1 12 7.8a3.9 3.9 0 0 1 7 2.3c0 5.1-7 9.4-7 9.4z"/></svg></span>收藏</button>
+      <button data-target="settings"><span class="nav-tile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7.5h9M17.5 7.5h2M4.5 16.5h2M10.5 16.5h9"/><circle cx="15.5" cy="7.5" r="2"/><circle cx="8.5" cy="16.5" r="2"/></svg></span>设置</button>
     </nav>
+  </div>
+
+  <!-- Conversation History Drawer -->
+  <div class="assistant-drawer-backdrop" id="assistantDrawerBackdrop"></div>
+  <aside class="assistant-drawer" id="assistantDrawer" aria-label="会话抽屉">
+    <div class="assistant-drawer-head">
+      <h3>历史对话</h3>
+      <button type="button" class="assistant-icon-btn" id="assistantDrawerClose" aria-label="关闭抽屉">✕</button>
+    </div>
+    <button type="button" class="assistant-drawer-new-btn" id="assistantDrawerNewBtn">+ 新建对话</button>
+    <div class="assistant-conv-list" id="assistantConvList">
+      <!-- Conversation items rendered dynamically -->
+    </div>
+  </aside>
+
+  <!-- Delete Conversation Confirmation Modal -->
+  <div class="assistant-modal-backdrop" id="assistantDeleteModal">
+    <div class="assistant-dialog" role="dialog" aria-labelledby="deleteConvTitle">
+      <div class="assistant-dialog-head">
+        <h3 id="deleteConvTitle">删除对话</h3>
+      </div>
+      <div class="assistant-dialog-body">
+        <p><strong>确定删除这段对话吗？对话及消息将删除，但已经保存的喂奶、尿布、睡眠等生活记录不会自动删除。</strong></p>
+      </div>
+      <div class="assistant-dialog-foot">
+        <button type="button" class="assistant-btn-cancel" id="assistantDeleteCancelBtn">取消</button>
+        <button type="button" class="assistant-btn-danger" id="assistantDeleteConfirmBtn">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename Conversation Modal -->
+  <div class="assistant-modal-backdrop" id="assistantRenameModal">
+    <div class="assistant-dialog" role="dialog" aria-labelledby="renameConvTitle">
+      <div class="assistant-dialog-head">
+        <h3 id="renameConvTitle">重命名对话</h3>
+      </div>
+      <div class="assistant-dialog-body">
+        <div class="assistant-form-group">
+          <label for="assistantRenameInput">对话标题 (1-80字)</label>
+          <input type="text" id="assistantRenameInput" maxlength="80" placeholder="例如：宝宝下午喂奶记录">
+        </div>
+      </div>
+      <div class="assistant-dialog-foot">
+        <button type="button" class="assistant-btn-cancel" id="assistantRenameCancelBtn">取消</button>
+        <button type="button" class="assistant-btn-primary" id="assistantRenameSaveBtn">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Care Events Management Modal -->
+  <div class="assistant-modal-backdrop" id="assistantCareEventsModal">
+    <div class="assistant-dialog" style="width: min(100%, 520px);" role="dialog" aria-labelledby="careEventsTitle">
+      <div class="assistant-dialog-head">
+        <h3 id="careEventsTitle">生活记录管理</h3>
+        <button type="button" class="assistant-icon-btn" id="careEventsModalClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="assistant-dialog-body">
+        <div class="care-events-filter-bar">
+          <label style="font-size: 10px; color: var(--muted);">从</label>
+          <input type="date" id="careEventFromDate">
+          <label style="font-size: 10px; color: var(--muted);">到</label>
+          <input type="date" id="careEventToDate">
+          <button type="button" class="assistant-btn-primary" id="openAddCareEventBtn" style="margin-left: auto;">+ 手动记一条</button>
+        </div>
+        <div class="care-type-pills">
+          <button type="button" class="care-type-pill active" data-type="all">全部</button>
+          <button type="button" class="care-type-pill" data-type="feeding">🍼 喂奶</button>
+          <button type="button" class="care-type-pill" data-type="sleep">🌙 睡眠</button>
+          <button type="button" class="care-type-pill" data-type="diaper">🧷 换尿布</button>
+          <button type="button" class="care-type-pill" data-type="activity">🎈 活动</button>
+        </div>
+        <div class="care-events-list" id="careEventsList">
+          <!-- Events rendered dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit/Create Care Event Sub-Modal -->
+  <div class="assistant-modal-backdrop" id="editCareEventModal">
+    <div class="assistant-dialog" role="dialog" aria-labelledby="editCareEventTitle">
+      <div class="assistant-dialog-head">
+        <h3 id="editCareEventTitle">编辑生活记录</h3>
+      </div>
+      <div class="assistant-dialog-body">
+        <div class="assistant-form-group">
+          <label for="editCareEventType">记录类型</label>
+          <select id="editCareEventType">
+            <option value="feeding">🍼 喂奶</option>
+            <option value="sleep">🌙 睡眠</option>
+            <option value="diaper">🧷 换尿布</option>
+            <option value="activity">🎈 日常活动</option>
+          </select>
+        </div>
+        <div class="assistant-form-group">
+          <label for="editCareEventOccurred">发生时间</label>
+          <input type="datetime-local" id="editCareEventOccurred">
+        </div>
+        <div class="assistant-form-group" id="editCareEventEndGroup">
+          <label for="editCareEventEnd">结束时间（可选）</label>
+          <input type="datetime-local" id="editCareEventEnd">
+        </div>
+        <div class="assistant-form-group" id="editCareEventAmountGroup">
+          <label for="editCareEventAmount">饮用奶量 (ml)</label>
+          <input type="number" id="editCareEventAmount" min="1" max="2000" placeholder="150">
+        </div>
+        <div class="assistant-form-group" id="editCareEventDiaperGroup" hidden>
+          <label for="editCareEventDiaper">尿布类型</label>
+          <select id="editCareEventDiaper">
+            <option value="wet">尿湿</option>
+            <option value="dirty">便便</option>
+            <option value="mixed">便+湿</option>
+            <option value="unknown">未说明</option>
+          </select>
+        </div>
+        <div class="assistant-form-group">
+          <label for="editCareEventNotes">备注</label>
+          <input type="text" id="editCareEventNotes" placeholder="填写说明...">
+        </div>
+      </div>
+      <div class="assistant-dialog-foot">
+        <button type="button" class="assistant-btn-cancel" id="cancelCareEventBtn">取消</button>
+        <button type="button" class="assistant-btn-primary" id="saveCareEventBtn">保存</button>
+      </div>
+    </div>
   </div>
 
   <div class="wake-overlay" id="wakeOverlay" hidden>
     <div class="wake-dialog">
       <span class="wake-symbol">☀</span>
-      <p>Edge AI Monitor</p>
+      <p>Nestory</p>
       <h2>睡醒啦</h2>
       <button id="dismissWake">我知道了</button>
     </div>
   </div>
   <div class="toast" id="toast" hidden></div>
-  <script src="/app.js?v=27" defer></script>
+  <script src="/assistant.js?v=13" defer></script>
+  <script src="/play.js?v=6" defer></script>
+  <script src="/timeline.js?v=7" defer></script>
+  <script src="/app.js?v=38" defer></script>
 </body>
 </html>

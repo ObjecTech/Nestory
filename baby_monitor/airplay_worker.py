@@ -141,7 +141,7 @@ async def _run(args: argparse.Namespace) -> int:
         transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin)
         metadata = MediaMetadata(
             title=args.title,
-            artist="Edge AI Monitor",
+            artist="Nestory",
             album=args.category,
         )
         # A real path makes pyatv use its file decoder. Audio receiver accepts this

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#4f8a69"/>
+      <stop offset="1" stop-color="#2c5a44"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.52" r="0.45">
+      <stop offset="0" stop-color="#f7e7c6" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#f7e7c6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="egg" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#f1dfc0"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffdf7"/>
+      <stop offset="1" stop-color="#efe5d3"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <!-- bedtime moon and stars: the "story" -->
+  <path d="M742 214a92 92 0 1 0 74 150a74 74 0 1 1 -74 -150z" fill="#f6dfa8"/>
+  <g fill="#f6dfa8">
+    <circle cx="262" cy="250" r="11"/>
+    <circle cx="340" cy="178" r="7"/>
+    <circle cx="620" cy="168" r="8"/>
+    <path d="M226 382l9 25 25 9 -25 9 -9 25 -9 -25 -25 -9 25 -9z"/>
+  </g>
+  <!-- egg resting in the book -->
+  <ellipse cx="512" cy="478" rx="112" ry="140" fill="url(#egg)"/>
+  <ellipse cx="474" cy="430" rx="30" ry="46" fill="#ffffff" opacity="0.7"/>
+  <!-- open book pages -->
+  <path d="M512 622 C430 566 320 552 214 578 L214 732 C320 708 430 722 512 778 Z" fill="url(#page)"/>
+  <path d="M512 622 C594 566 704 552 810 578 L810 732 C704 708 594 722 512 778 Z" fill="url(#page)"/>
+  <path d="M512 622 L512 778" stroke="#d8c6a6" stroke-width="6"/>
+  <g stroke="#d9c9ab" stroke-width="8" stroke-linecap="round" fill="none">
+    <path d="M268 626 C340 612 410 620 466 650"/>
+    <path d="M268 670 C340 656 410 664 466 694"/>
+    <path d="M756 626 C684 612 614 620 558 650"/>
+    <path d="M756 670 C684 656 614 664 558 694"/>
+  </g>
+  <!-- woven nest wrapping the book -->
+  <path d="M184 694 C250 900 774 900 840 694 C720 770 304 770 184 694 Z" fill="#9c6c45"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M180 690 C260 860 764 860 844 690" stroke="#b8865a" stroke-width="40"/>
+    <path d="M206 752 C300 892 724 892 818 752" stroke="#d3a575" stroke-width="34"/>
+    <path d="M262 812 C360 916 664 916 762 812" stroke="#b8865a" stroke-width="30"/>
+    <g stroke="#ecd0a4" stroke-width="9" opacity="0.85">
+      <path d="M232 740 C300 800 380 820 440 822"/>
+      <path d="M792 740 C724 800 644 820 584 822"/>
+      <path d="M330 850 C420 872 604 872 694 850"/>
+    </g>
+  </g>
+</svg>

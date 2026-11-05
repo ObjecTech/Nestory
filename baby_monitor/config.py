@@ -59,6 +59,7 @@ class Config:
     bluetooth_speaker_mac: str
     ffmpeg_path: Path
     play_default_volume: int
+    pulse_python: Path
     voice_worker_python: Path
     voice_model_dir: Path
     voice_keywords_file: Path
@@ -71,6 +72,11 @@ class Config:
     voice_schedule_end: str
     voice_timezone: str
     person_test_mode: bool = False
+    assistant_enabled: bool = False
+    vlm_min_brightness: float = 40.0
+    cry_enabled: bool = True
+    cry_model_dir: Path | None = None
+    cry_threshold: float = 0.5
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -89,10 +95,11 @@ class Config:
         return cls(
             app_dir=app_dir,
             person_test_mode=_bool_env("BMON_PERSON_TEST_MODE", False),
+            assistant_enabled=_bool_env("BMON_ASSISTANT_ENABLED", False),
             data_dir=data_dir,
             media_mount=media_mount,
             media_dir=media_dir,
-            static_dir=app_dir / "static",
+            static_dir=Path(os.getenv("BMON_STATIC_DIR", str(app_dir / "static"))),
             host=os.getenv("BMON_HOST", "127.0.0.1"),
             port=int(os.getenv("BMON_PORT", "8080")),
             camera_device=os.getenv("BMON_CAMERA_DEVICE", "/dev/video0"),
@@ -118,6 +125,7 @@ class Config:
                 os.getenv("BMON_VLM_CONFIDENCE_THRESHOLD", "0.60")
             ),
             vlm_stable_seconds=float(os.getenv("BMON_VLM_STABLE_SECONDS", "20")),
+            vlm_min_brightness=float(os.getenv("BMON_VLM_MIN_BRIGHTNESS", "40")),
             emotion_model_name=os.getenv(
                 "BMON_EMOTION_MODEL_NAME", "enet_b0_8_best_afew"
             ),
@@ -162,6 +170,7 @@ class Config:
             bluetooth_speaker_mac=os.getenv("BMON_BLUETOOTH_SPEAKER_MAC", ""),
             ffmpeg_path=Path(os.getenv("BMON_FFMPEG_PATH", "/usr/bin/ffmpeg")),
             play_default_volume=int(os.getenv("BMON_PLAY_DEFAULT_VOLUME", "25")),
+            pulse_python=Path(os.getenv("BMON_PULSE_PYTHON", "/usr/bin/python3")),
             voice_worker_python=Path(
                 os.getenv(
                     "BMON_VOICE_PYTHON",
@@ -193,11 +202,15 @@ class Config:
                 )
             ),
             voice_audio_device=os.getenv("BMON_VOICE_AUDIO_DEVICE", "plughw:0,0"),
-            voice_wake_word=os.getenv("BMON_VOICE_WAKE_WORD", "八戒"),
+            voice_wake_word=os.getenv("BMON_VOICE_WAKE_WORD", "佩奇"),
             voice_default_enabled=_bool_env("BMON_VOICE_ENABLED", False),
             voice_schedule_start=os.getenv("BMON_VOICE_SCHEDULE_START", "07:00"),
             voice_schedule_end=os.getenv("BMON_VOICE_SCHEDULE_END", "23:00"),
             voice_timezone=os.getenv("BMON_VOICE_TIMEZONE", "Asia/Shanghai"),
+            cry_enabled=_bool_env("BMON_CRY_ENABLED", True),
+            cry_model_dir=Path(os.getenv("BMON_CRY_MODEL_DIR",
+                str(app_dir / "models/sherpa-onnx-zipformer-small-audio-tagging-2024-04-15"))),
+            cry_threshold=float(os.getenv("BMON_CRY_THRESHOLD", "0.5")),
         )
 
     def ensure_directories(self) -> None:

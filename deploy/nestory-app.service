@@ -1,0 +1,15 @@
+[Unit]
+Description=Nestory web application
+After=network-online.target nestory-model.service
+Wants=nestory-model.service
+
+[Service]
+Type=simple
+ExecStart=%h/nestory-releases/current/scripts/start-release.sh app
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,481 @@
+/* Nestory Play With Me - Parent-Child Interactions UI */
+
+.play-interactions-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px dashed var(--line);
+}
+
+.play-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.play-section-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.play-section-title-wrap h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.play-scope-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.play-scope-select {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 12px;
+  color: var(--ink);
+  outline: none;
+}
+
+.play-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.play-section-intro {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+/* Category Filter Tabs */
+.play-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.play-filter-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.play-filter-btn:hover {
+  background: #f5f3ef;
+  color: var(--ink);
+}
+
+.play-filter-btn.active {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+
+/* Activities Grid */
+.play-activities-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.activity-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.activity-card:hover {
+  border-color: #d1cbbd;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.activity-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activity-kind-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.activity-kind-tag.kind-finger_play {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.activity-kind-tag.kind-game {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.activity-kind-tag.kind-sensory {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.activity-card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+}
+
+.activity-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.activity-steps-details {
+  border-top: 1px solid #f1ece4;
+  padding-top: 8px;
+  font-size: 12px;
+}
+
+.activity-steps-details summary {
+  cursor: pointer;
+  color: #8b6b3e;
+  font-weight: 500;
+  user-select: none;
+  margin-bottom: 6px;
+}
+
+.activity-steps-list {
+  margin: 6px 0 0 18px;
+  padding: 0;
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.activity-steps-list li {
+  margin-bottom: 4px;
+}
+
+/* Timer & Action Bar */
+.activity-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid #f8f6f2;
+}
+
+.activity-btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.activity-btn-primary {
+  background: var(--ink);
+  color: #fff;
+}
+
+.activity-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.activity-btn[data-action="start"] {
+  background: #ffffff;
+  color: var(--text, #333333);
+  border: 1px solid #dcd7ce;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.activity-btn[data-action="start"]:hover {
+  background: #f7f4ee;
+  border-color: #cbc4b6;
+}
+
+.play-expand-box {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+  margin-bottom: 12px;
+}
+
+.play-expand-btn {
+  padding: 7px 20px;
+  border-radius: 999px;
+  border: 1px solid #dcd7ce;
+  background: #ffffff;
+  color: var(--text, #333333);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.play-expand-btn:hover {
+  background: #f7f4ee;
+  border-color: #cbc4b6;
+}
+
+.activity-btn-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+
+.activity-btn-danger:hover {
+  background: #fecaca;
+}
+
+.activity-timer-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.activity-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: playPulse 1s infinite alternate;
+}
+
+@keyframes playPulse {
+  from { opacity: 0.4; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1.15); }
+}
+
+/* Finish & Reaction Dialog / Card */
+.activity-record-form {
+  background: #fbf9f5;
+  border: 1px solid #eeddcc;
+  border-radius: 10px;
+  padding: 12px;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.activity-form-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.reaction-buttons-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.reaction-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.reaction-btn .emoji {
+  font-size: 18px;
+}
+
+.reaction-btn:hover {
+  border-color: #c0b8aa;
+}
+
+.reaction-btn.selected {
+  border-color: #8fb19d;
+  background: #f0f7f3;
+  font-weight: 600;
+  color: #1e663a;
+}
+
+.activity-notes-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-family: inherit;
+  resize: vertical;
+  min-height: 52px;
+}
+
+.activity-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activity-form-error {
+  font-size: 11px;
+  color: #b91c1c;
+  background: #fee2e2;
+  padding: 6px 10px;
+  border-radius: 6px;
+  display: none;
+}
+
+.activity-form-error.visible {
+  display: block;
+}
+
+/* Today's Saved Interactions */
+.today-interactions-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  margin-top: 14px;
+}
+
+.today-interactions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.today-interactions-header strong {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.today-interactions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.today-interaction-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #faf8f5;
+  border: 1px solid #f1ece4;
+  font-size: 12px;
+}
+
+.interaction-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.interaction-item-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.interaction-item-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.interaction-item-reaction {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eef7f2;
+  color: #1e663a;
+}
+
+.interaction-item-notes {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.interaction-delete-btn {
+  background: none;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+
+.interaction-delete-btn:hover {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.today-empty-tip {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding: 16px 0;
+}
+
+@media (max-width: 680px) {
+  .play-activities-grid {
+    grid-template-columns: 1fr;
+  }
+  .reaction-buttons-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

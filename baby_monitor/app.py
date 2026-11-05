@@ -18,6 +18,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from .camera import Camera, Frame
 from .config import Config
+from .cry_detection import CryTracker
 from .database import POSTURE_VALUES, Database
 from .inference import InferenceWorker
 from .play_with_me import PlayWithMePlayer
@@ -135,8 +136,17 @@ class BabyMonitorApp:
             default_volume=config.play_default_volume,
             playback_backend=config.playback_backend,
             bluetooth_speaker_mac=config.bluetooth_speaker_mac,
+            pulse_python=config.pulse_python,
         )
+        self._cry_interval_id: int | None = None
+        self.cry = CryTracker(on_start=self._cry_started, on_end=self._cry_ended,
+                              threshold=config.cry_threshold)
         self.voice = VoiceControl(
+            cry_model_dir=config.cry_model_dir,
+            cry_enabled=config.cry_enabled,
+            on_cry_score=self.cry.observe,
+            on_cry_stopped=self.cry.flush,
+            on_record=self.voice_record,
             player=self.player,
             settings_path=config.data_dir / "voice_control.json",
             worker_python=config.voice_worker_python,
@@ -190,10 +200,24 @@ class BabyMonitorApp:
             confidence_threshold=config.vlm_confidence_threshold,
             stable_seconds=config.vlm_stable_seconds,
             motion_threshold=config.motion_threshold,
+            min_brightness=config.vlm_min_brightness,
             on_transition=self.transition,
             on_observation=self.publish_vlm_observation,
             on_expression=self.save_expression_photo,
         )
+
+        self.assistant = None
+        self.assistant_error = None
+        if config.assistant_enabled:
+            from .assistant_service import AssistantService
+            try:
+                self.assistant = AssistantService(config.data_dir / "assistant.db",
+                    visual_path=config.data_dir / "baby_monitor.db", endpoint=config.vlm_service_url,
+                    visual_mode=lambda: self.database.observation_mode)
+            except Exception:
+                # Assistant storage/migration failures must not prevent vision startup.
+                self.assistant_error = "storage_unavailable"
+
 
     @observation_locked
     def set_observation_subject(self, enabled: bool) -> dict[str, Any]:
@@ -219,6 +243,8 @@ class BabyMonitorApp:
         self.voice.start()
 
     def stop(self) -> None:
+        if self.assistant:
+            self.assistant.close()
         self.voice.close()
         self.player.close()
         self.vlm.stop()
@@ -262,10 +288,11 @@ class BabyMonitorApp:
                             if self.vlm.enabled else max(self.config.analysis_interval_seconds, 5.0) * 2)
         observation_valid = bool(camera_fresh and last_success is not None and now - last_success <= freshness_window)
         return {
-            "title": "Edge AI Monitor",
+            "title": "Nestory",
             "person_test_mode": self.vlm.person_test_mode,
             "observation_mode": self.database.observation_mode,
             "observation_valid": observation_valid,
+            "low_light": bool(self.vlm.enabled and self.vlm.low_light),
             "now": now,
             "activity": {
                 "value": activity.get("value", "unknown"),
@@ -296,6 +323,7 @@ class BabyMonitorApp:
                 "error": self.camera.error,
                 "last_frame_ts": latest.ts if latest else None,
                 "motion_score": round(self.camera.motion_score, 2),
+                "brightness": None if getattr(self.camera, "brightness", None) is None else round(self.camera.brightness, 1),
                 "device": self.config.camera_device,
                 "resolution": f"{self.config.camera_width}×{self.config.camera_height}",
             },
@@ -316,6 +344,11 @@ class BabyMonitorApp:
                 },
             },
             "storage": self.storage_status(),
+            "cry": {
+                "active": self.cry.active_since is not None,
+                "since": self.cry.active_since,
+                "last_score": round(self.cry.last_score, 3),
+            },
         }
 
     @observation_locked
@@ -374,13 +407,43 @@ class BabyMonitorApp:
                 )
                 self.events.publish(
                     "wake",
-                    {"message": "Edge AI Monitor睡醒啦", **payload},
+                    {"message": "Nestory：宝宝睡醒啦", **payload},
                 )
         return {
             "changed": changed,
             "classified_photo_saved": classified_photo_saved,
             **payload,
         }
+
+    def voice_record(self, text: str) -> dict[str, Any]:
+        """A spoken record ("佩奇，记一下…") handled by the AI assistant like a typed message."""
+        if self.assistant is None:
+            raise RuntimeError("AI 助手未启用，无法语音记录")
+        reply = self.assistant.voice_record(text, self.config.voice_timezone)
+        if reply["status"] == "failed":
+            raise RuntimeError("语音记录失败，请在 AI 助手里重试")
+        if reply["status"] in ("queued", "running"):
+            message = "已收到，正在处理，可在 AI 助手的「语音记录」对话里查看"
+        else:
+            message = (reply.get("assistant_message") or {}).get("content") or "已处理"
+            if any(action["status"] == "needs_confirmation" for action in reply["record_actions"]):
+                message += "（请在 AI 助手的「语音记录」对话里补充）"
+        self.events.publish("voice_record", {"text": text, "message": message, "status": reply["status"],
+                                             "saved": sum(1 for a in reply["record_actions"] if a["status"] == "saved")})
+        return {"message": message}
+
+    @observation_locked
+    def _cry_started(self, start_ts: float, score: float) -> None:
+        self._cry_interval_id = self.database.start_cry(start_ts, score)
+        self.events.publish("cry", {"active": True, "since": start_ts, "score": round(score, 3),
+                                    "observation_mode": self.database.observation_mode})
+
+    @observation_locked
+    def _cry_ended(self, end_ts: float, peak: float) -> None:
+        if self._cry_interval_id is not None:
+            self.database.end_cry(self._cry_interval_id, end_ts, peak)
+        self._cry_interval_id = None
+        self.events.publish("cry", {"active": False, "until": end_ts, "peak": round(peak, 3)})
 
     def publish_vlm_observation(self, observation: dict[str, Any]) -> None:
         self.events.publish("vlm_observation", observation)

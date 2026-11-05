@@ -4,8 +4,7 @@ const state = {
   audioContext: null,
   timer: null,
   snapshotTimer: null,
-  heroSnapshotTimer: null,
-  heroSnapshotBusy: false,
+  cryDetection: null,
   cameraMode: "initial",
   accessMode: document.querySelector('meta[name="bmon-access-mode"]')?.content || "local",
   previousActivity: null,
@@ -18,6 +17,7 @@ const state = {
   voiceTimer: null,
   volumeTimer: null,
   playerSeeking: false,
+  observationMode: "infant",
 };
 
 const activityLabels = {
@@ -59,9 +59,19 @@ function formatDuration(seconds) {
   return `${seconds}秒`;
 }
 
+// All times are shown in the household's timezone (Asia/Shanghai), whatever
+// timezone the viewing phone or laptop is set to.
+const SHANGHAI_PARTS = new Intl.DateTimeFormat("en-CA", {timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
+function shanghaiParts(date) {
+  const parts = {};
+  for (const part of SHANGHAI_PARTS.formatToParts(date)) parts[part.type] = part.value;
+  return parts;
+}
+
 function formatTime(ts) {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
+  const p = shanghaiParts(new Date(ts * 1000));
+  return `${p.hour}:${p.minute}`;
 }
 
 function formatMediaTime(seconds) {
@@ -80,24 +90,6 @@ function showToast(message) {
   toast.hidden = false;
   clearTimeout(toast._timer);
   toast._timer = setTimeout(() => { toast.hidden = true; }, 2600);
-}
-
-function refreshHeroSnapshot() {
-  if (
-    state.heroSnapshotBusy
-    || document.visibilityState !== "visible"
-    || (state.status && !state.status.camera.online)
-  ) return;
-
-  state.heroSnapshotBusy = true;
-  const snapshot = new Image();
-  snapshot.onload = () => {
-    $("#heroPhoto").style.backgroundImage = `url('${snapshot.src}')`;
-    $("#heroPhoto").classList.add("camera-ready");
-    state.heroSnapshotBusy = false;
-  };
-  snapshot.onerror = () => { state.heroSnapshotBusy = false; };
-  snapshot.src = `/snapshot.jpg?hero=${Date.now()}`;
 }
 
 async function api(path, options = {}) {
@@ -129,37 +121,55 @@ async function api(path, options = {}) {
 
 const observationModeLabels = {infant: "婴幼儿", adult_test: "成人测试", legacy_unknown: "历史模式未知"};
 
+// The records list starts on the observation mode chosen in settings, so adult
+// testing shows its own records without switching the dropdown by hand.
+function syncRecordMode(mode) {
+  if (!mode || state.observationMode === mode) return;
+  state.observationMode = mode;
+  if (document.querySelector('.page[data-page="records"].active')) {
+    loadTimeline();
+    if (window.TimelineController) {
+      window.TimelineController.loadUnifiedTimeline?.();
+    }
+  }
+}
+
 function renderStatus(data) {
-  $("#personTestBanner").hidden = !data.person_test_mode;
+  syncRecordMode(data.observation_mode);
   if (!$("#observationSubjectSwitch").disabled) {
     $("#observationSubjectSwitch").checked = !!data.person_test_mode;
   }
   const previousActivity = state.previousActivity;
   state.status = data;
   const cameraOnline = data.camera.online;
+  const lowLight = cameraOnline && !!data.low_light;
   const activityValid = data.observation_valid !== false || data.activity.source === "manual";
   const postureValid = data.observation_valid !== false || data.posture.source === "manual";
   const activity = cameraOnline && activityValid ? data.activity.value : "unknown";
   state.previousActivity = activity;
   const posture = cameraOnline && postureValid ? data.posture.value : "unknown";
-  $("#activityTitle").textContent = cameraOnline
-    ? (activityLabels[activity] || activity)
-    : "等待摄像头画面";
+  $("#activityTitle").textContent = !cameraOnline
+    ? "等待摄像头画面"
+    : lowLight ? "光线不足" : (activityLabels[activity] || activity);
   $("#activityChip").textContent = !cameraOnline
     ? "摄像头离线"
     : (data.activity.source === "manual" ? "手动校正" : "当前状态");
   $("#activityDuration").textContent = !cameraOnline
     ? "画面恢复后自动分析"
+    : lowLight
+      ? "视觉分析已暂停，夜间睡眠请告诉 AI 助手"
     : !activityValid
       ? "上次结果已过期，等待新的成功观察"
     : activity === "unknown"
       ? "等待识别结果"
     : `已持续 ${formatDuration(data.activity.duration_seconds)}`;
-  $("#postureTitle").textContent = cameraOnline
-    ? (postureLabels[posture] || posture)
-    : "等待画面";
+  $("#postureTitle").textContent = !cameraOnline
+    ? "等待画面"
+    : lowLight ? "暂停识别" : (postureLabels[posture] || posture);
   $("#postureDuration").textContent = !cameraOnline
     ? "摄像头恢复后重新判断"
+    : lowLight
+      ? "有亮光后自动恢复"
     : !postureValid
       ? "上次结果已过期，等待新的成功观察"
     : posture === "unknown"
@@ -175,28 +185,31 @@ function renderStatus(data) {
   $("#cameraError").textContent = online ? "" : "正在自动重连";
   $("#cameraLiveBadge").classList.toggle("offline", !online);
   $("#cameraLiveBadge span").textContent = online ? "LIVE" : "OFFLINE";
-  $("#cameraResolution").textContent = data.camera.resolution;
-  if (!online) {
-    $("#heroPhoto").style.backgroundImage = "";
-    $("#heroPhoto").classList.remove("camera-ready");
-  }
-  if (online && !$("#heroPhoto").classList.contains("camera-ready")) refreshHeroSnapshot();
-
   const modelOnline = online && data.model.online;
+  const modelError = data.model.enabled && !!data.model.last_error;
   $("#modelTitle").textContent = !online
     ? "等待摄像头"
-    : (modelOnline ? "运行中" : (data.model.enabled ? "正在连接" : "已关闭"));
+    : lowLight ? "已暂停"
+    : !data.model.enabled ? "已关闭"
+    : modelError ? "识别出错"
+    : modelOnline && data.observation_valid === false ? "结果过期"
+    : modelOnline ? "运行中" : "正在连接";
+  $("#modelTitle").className = modelError || (modelOnline && data.observation_valid === false) ? "state-warning" : "";
   $("#modelDetail").textContent = !online
     ? "收到新画面后自动分析"
-    : (modelOnline ? "本地自动识别" : "可手动校正");
+    : lowLight ? "光线不足，有亮光后恢复"
+    : !data.model.enabled ? "可手动校正"
+    : modelError ? "暂时无法识别，可手动校正"
+    : modelOnline && data.observation_valid === false ? "等待新的识别结果"
+    : modelOnline ? "本地运行，不上传" : "等待本地识别启动";
   $("#cameraSetting").textContent = `Camera · ${data.camera.resolution}`;
   $("#cameraSettingBadge").textContent = online ? "正常" : "离线";
   $("#cameraSettingBadge").className = online ? "good" : "";
   $("#modelSettingBadge").textContent = modelOnline ? "运行中" : (online ? "正在连接" : "等待画面");
   $("#modelSettingBadge").className = modelOnline ? "good" : "";
   $("#modelSetting").textContent = modelOnline
-    ? `${data.model.name}${data.model.posture_classifier_available === false ? " · 轻量睡姿模型未配置" : ""}`
-    : (data.model.last_error || data.model.name);
+    ? "本地运行，画面不上传"
+    : (data.model.last_error || "本地运行，画面不上传");
 
   const storage = data.storage;
   const storageText = storage.mounted ? "存储就绪" : "存储不可用";
@@ -215,6 +228,26 @@ function renderStatus(data) {
   ) {
     triggerWakeAlert();
   }
+
+  renderCryStatus(data.cry);
+  const cry = data.cry || {};
+  const cryAlert = $("#cryAlertBanner");
+  if (cryAlert) {
+    if (cry.active) {
+      cryAlert.textContent = `检测到哭声 · ${formatTime(cry.since)} 起`;
+      cryAlert.hidden = false;
+    } else {
+      cryAlert.hidden = true;
+    }
+  }
+}
+
+function renderCryStatus(cry) {
+  const detection = state.cryDetection;
+  const ready = cry && detection && detection.enabled && detection.ready && detection.running;
+  $("#cryTitle").textContent = !ready ? "未开启" : cry.active ? "正在哭" : "安静";
+  $("#cryTitle").className = ready && cry.active ? "state-warning" : "";
+  $("#cryDetail").textContent = !ready ? "尚未开始监听" : cry.active ? "仅记录时段，不录音" : "正在本地监听";
 }
 
 async function refreshStatus() {
@@ -237,6 +270,13 @@ function connectEvents() {
       loadPhotos();
     }
     if (message.type === "voice") renderVoiceSettings(message);
+    if (message.type === "cry") refreshStatus();
+    if (message.type === "voice_record") {
+      showToast(`语音记录：${message.message || ""}`);
+      if (document.querySelector('.page[data-page="assistant"]')?.classList.contains("active")) {
+        window.Assistant?.onPageShow?.();
+      }
+    }
     refreshStatus();
   };
   events.onerror = () => {};
@@ -294,7 +334,7 @@ function triggerWakeAlert() {
   if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]);
   $("#wakeOverlay").hidden = false;
   if ("Notification" in window && Notification.permission === "granted") {
-    new Notification("Edge AI Monitor睡醒啦", {body: "请打开监控页面查看当前状态。"});
+    new Notification("Nestory：宝宝睡醒啦", {body: "请打开监控页面查看当前状态。"});
   }
 }
 
@@ -319,7 +359,7 @@ function isStandalone() {
 
 function configureAccessMode() {
   $("#remoteAccessSetting").hidden = false;
-  $("#accessEyebrow").textContent = "EDGE AI RESEARCH MONITOR";
+  $("#accessEyebrow").textContent = "NEST · STORY";
 }
 
 function renderAccessSettings(access) {
@@ -376,13 +416,13 @@ function renderVoiceSettings(voice) {
   const input = $("#voiceControlSwitch");
   input.checked = Boolean(voice.enabled);
   input.disabled = state.accessMode === "remote";
-  $("#voiceWakeBadge").textContent = voice.wake_word || "八戒";
+  $("#voiceWakeBadge").textContent = voice.wake_word || "佩奇";
   const schedule = `${voice.schedule_start || "07:00"}–${voice.schedule_end || "23:00"}`;
-  $("#voiceWakeDetail").textContent = `每日 ${schedule} 监听，唤醒后六秒内说出音乐指令`;
+  $("#voiceWakeDetail").textContent = `每日 ${schedule} 监听，唤醒后八秒内说出指令；可以控制音乐，也可以说“记一下……”来记录`;
   const labels = {
     disabled: "已关闭，不监听环境声音",
     starting: "正在启动离线语音服务",
-    listening: `已就绪，先说“${voice.wake_word || "八戒"}”（${schedule}）`,
+    listening: `已就绪，先说“${voice.wake_word || "佩奇"}”（${schedule}）`,
     outside_schedule: `当前不监听，将按每日 ${schedule} 自动运行`,
     waiting_command: "已唤醒，请在六秒内说出音乐指令",
     transcribing: "正在理解刚才说的音乐指令",
@@ -395,6 +435,33 @@ function renderVoiceSettings(voice) {
   $("#voiceControlDetail").textContent = state.accessMode === "remote"
     ? "语音监听只能在授权网络中开关"
     : (labels[voice.state] || "正在检查语音服务");
+
+  const cry = voice.cry_detection || {};
+  state.cryDetection = cry;
+  if (state.status) renderCryStatus(state.status.cry);
+  let cryText = "全天运行中 · 只记录哭声时间段，不保存录音";
+  let cryBadge = "运行中";
+  let isGood = true;
+  if (cry.enabled === false) {
+    cryText = "已关闭";
+    cryBadge = "已关闭";
+    isGood = false;
+  } else if (cry.ready === false) {
+    cryText = "哭声模型未就绪";
+    cryBadge = "未就绪";
+    isGood = false;
+  } else if (!cry.running) {
+    cryText = "正在启动，麦克风接入后自动开始";
+    cryBadge = "启动中";
+    isGood = false;
+  }
+  const cryDetail = $("#cryDetectionDetail");
+  if (cryDetail) cryDetail.textContent = cryText;
+  const cryBadgeEl = $("#cryDetectionBadge");
+  if (cryBadgeEl) {
+    cryBadgeEl.textContent = cryBadge;
+    cryBadgeEl.className = isGood ? "good" : "";
+  }
 }
 
 async function loadVoiceStatus() {
@@ -546,41 +613,15 @@ async function savePhoto() {
   }
 }
 
-function renderTimeline(container, items) {
-  items = Array.isArray(items) ? items.filter(item => item != null) : [];
-  if (!items.length) {
-    container.innerHTML = '<div class="timeline-empty">当天还没有记录</div>';
-    return;
-  }
-  container.innerHTML = items.map(item => {
-    const labels = item.category === "activity" ? activityLabels : postureLabels;
-    const end = item.ends_at_day_boundary ? "24:00" : (item.end_ts ? formatTime(item.end_ts) : "现在");
-    const color = item.category === "activity" ? activityColors[item.value] : "#7f9d8a";
-    return `<div class="timeline-item">
-      <span class="timeline-time">${formatTime(item.start_ts)}–${end}</span>
-      <span class="timeline-state"><i style="background:${color}"></i>${item.value === "unknown" ? "未确认" : (labels[item.value] || item.value)}${item.observation_mode ? " · " + (observationModeLabels[item.observation_mode] || "历史模式未知") : ""}</span>
-      <span class="timeline-duration">${formatDuration(item.duration_seconds)}</span>
-    </div>`;
-  }).join("");
-}
-
 async function loadTimeline() {
-  const date = $("#recordDate").value;
-  const mode = $("#recordMode").value || "infant";
+  const date = $("#recordDate")?.value || "";
+  const mode = state.observationMode || "infant";
   try {
-    const [data, observations] = await Promise.all([
-      api(`/api/timeline?date=${encodeURIComponent(date)}&mode=${encodeURIComponent(mode)}`),
-      api(`/api/observations?date=${encodeURIComponent(date)}&mode=${encodeURIComponent(mode)}&limit=200`),
-    ]);
-    const intervals = Array.isArray(data?.intervals) ? data.intervals : [];
-    const activities = intervals.filter(item => item?.category === "activity");
-    const postures = intervals.filter(item => item?.category === "posture");
-    renderTimeline($("#activityTimeline"), activities);
-    renderTimeline($("#postureTimeline"), postures);
-    $("#recordCount").textContent = `${activities.length} 条`;
-    $("#sleepTotal").textContent = formatDuration(data?.totals?.activity?.sleeping ?? 0);
-    $("#awakeTotal").textContent = formatDuration(data?.totals?.activity?.awake ?? 0);
+    const observations = await api(`/api/observations?date=${encodeURIComponent(date)}&mode=${encodeURIComponent(mode)}&limit=200`);
     renderObservations(observations?.items);
+    if (typeof window !== "undefined" && window.TimelineController && typeof window.TimelineController.setObservations === "function") {
+      window.TimelineController.setObservations(observations?.items || []);
+    }
   } catch (error) {
     showToast(error.message);
   }
@@ -691,7 +732,8 @@ function renderPhotos() {
     const title = document.createElement("strong");
     title.textContent = `${item.label} · ${observationModeLabels[item.observation_mode] || "历史模式未知"}`;
     const details = document.createElement("span");
-    details.textContent = `${new Date(item.ts * 1000).toLocaleDateString("zh-CN")} · ${formatTime(item.ts)}`;
+    const day = shanghaiParts(new Date(item.ts * 1000));
+    details.textContent = `${day.year}/${Number(day.month)}/${Number(day.day)} · ${formatTime(item.ts)}`;
     caption.append(title, details);
     link.appendChild(caption);
 
@@ -805,8 +847,8 @@ function renderPlayer(data) {
   $("#playerDetail").textContent = data.error
     || data.prepare_error
     || (data.current_title
-      ? `Audio output · 队列还有 ${data.queue_remaining} 首`
-      : `Audio output 已连接到授权网络`);
+      ? `本轮还剩 ${data.queue_remaining} 首`
+      : `选择类目后开始播放`);
 
   const art = $("#recordArt");
   art.classList.toggle("spinning", ["connecting", "playing", "paused"].includes(data.state));
@@ -913,22 +955,44 @@ async function seekPlayer(input) {
 }
 
 function showPage(target) {
+  document.body.classList.toggle("page-assistant-active", target === "assistant");
   $$(".page").forEach(page => page.classList.toggle("active", page.dataset.page === target));
   $$(".bottom-nav button").forEach(button => button.classList.toggle("active", button.dataset.target === target));
   const dataAccessAllowed = state.accessMode === "remote" || state.access?.lan_enabled !== false;
-  if (target === "records" && dataAccessAllowed) loadTimeline();
+  if (target === "records" && dataAccessAllowed) {
+    loadTimeline();
+    if (window.TimelineController) {
+      const dateVal = $("#recordDate")?.value;
+      if (dateVal) window.TimelineController.state.date = dateVal;
+      window.TimelineController.loadSummary?.();
+      window.TimelineController.loadUnifiedTimeline?.();
+    }
+  }
   if (target === "smiles" && dataAccessAllowed) loadPhotos();
-  if (target === "play" && dataAccessAllowed) loadPlayer(false);
+  if (target === "play" && dataAccessAllowed) {
+    loadPlayer(false);
+    if (window.PlayInteractions) {
+      if (!window.PlayInteractions.state.activities.length) {
+        window.PlayInteractions.loadActivities?.();
+      }
+      window.PlayInteractions.loadTodayInteractions?.();
+    }
+  }
+  if (target === "assistant") window.Assistant?.onPageShow?.();
   window.scrollTo({top: 0, behavior: "smooth"});
 }
 
 async function initialize() {
   configureAccessMode();
   configurePwa();
-  const today = new Date();
-  $("#recordDate").value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  $("#recordMode").addEventListener("change", loadTimeline);
-  $("#recordDate").addEventListener("change", loadTimeline);
+  const today = shanghaiParts(new Date());
+  $("#recordDate").value = `${today.year}-${today.month}-${today.day}`;
+  $("#recordDate").addEventListener("change", () => {
+    loadTimeline();
+    if (window.TimelineController && $("#recordDate").value) {
+      window.TimelineController.setDate($("#recordDate").value);
+    }
+  });
   $("#enableAlertButton").addEventListener("click", enableAlerts);
   $("#dismissWake").addEventListener("click", () => { $("#wakeOverlay").hidden = true; });
   $("#savePhotoButton").addEventListener("click", savePhoto);
@@ -939,6 +1003,16 @@ async function initialize() {
   $("#voiceControlSwitch").addEventListener("change", event => changeVoiceControl(event.target));
   $$("[data-category]").forEach(button => button.addEventListener("click", () => setManualState(button)));
   $$("[data-photo-filter]").forEach(button => button.addEventListener("click", () => selectPhotoFilter(button)));
+  const photoMoreBtn = $("#photoFilterMoreBtn");
+  if (photoMoreBtn) {
+    photoMoreBtn.addEventListener("click", () => {
+      const moreContainer = $("#photoFiltersMore");
+      if (moreContainer) {
+        moreContainer.hidden = !moreContainer.hidden;
+        photoMoreBtn.textContent = moreContainer.hidden ? "更多 ▾" : "收起 ▴";
+      }
+    });
+  }
   $$("[data-player-action]").forEach(button => button.addEventListener("click", () => playerControl(button)));
   $("#playerVolume").addEventListener("input", event => changePlayerVolume(event.target));
   $("#playerProgress").addEventListener("input", event => previewPlayerSeek(event.target));
@@ -950,11 +1024,6 @@ async function initialize() {
     return;
   }
   configureCameraDisplay();
-  refreshHeroSnapshot();
-  state.heroSnapshotTimer = setInterval(refreshHeroSnapshot, 15000);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") refreshHeroSnapshot();
-  });
   refreshStatus();
   loadVoiceStatus();
   connectEvents();

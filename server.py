@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from access_control import AccessStateStore
 from baby_monitor.app import BabyMonitorApp
 from baby_monitor.config import Config
+from baby_monitor.assistant_http import is_assistant, handle as handle_assistant
 
 
 class MonitorServer(ThreadingHTTPServer):
@@ -49,6 +50,7 @@ class MonitorServer(ThreadingHTTPServer):
         self.app = app
         self.access_store = access_store
         self.auth = Sessions(auth_config or AuthConfig.from_env())
+        self.assistant_request_slots = threading.BoundedSemaphore(16)
         self.stream_lock = threading.RLock()
         self.active_streams = {}
 
@@ -153,13 +155,13 @@ class Handler(BaseHTTPRequestHandler):
     def _login_page(self):
         body = b"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Edge AI Monitor - Sign in</title>
+<title>Nestory - Sign in</title>
 <style>
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f0f5f1;color:#173c35;font:16px system-ui,sans-serif}main{width:100%;max-width:420px;padding:40px;background:#fff;border:1px solid #d3e1d9;border-radius:24px;box-shadow:0 14px 50px #173c3510}h1{font-size:28px;margin:12px 0}p{color:#60746c;line-height:1.5}label{display:block;margin:18px 0 8px;font-size:14px}input{display:block;width:100%;padding:12px;margin-top:7px;border:1px solid #b9cec2;border-radius:8px;font:inherit}button{width:100%;padding:13px;margin-top:24px;border:0;border-radius:9px;background:#28675e;color:white;font:inherit;cursor:pointer}.brand{letter-spacing:.12em;font-size:11px;font-weight:700;color:#28675e}small{display:block;margin-top:22px;color:#60746c;line-height:1.5}
-</style></head><body><main><span class="brand">EDGE AI RESEARCH PLATFORM</span>
-<h1>Edge AI Monitor</h1><p>Sign in to your authorized research workspace.</p>
+</style></head><body><main><span class="brand">NEST \xc2\xb7 STORY</span>
+<h1>Nestory</h1><p>Sign in to your family workspace. Everything stays on this device.</p>
 <form method="post" action="/login"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button></form>
-<small>Research software. Not a medical device.<br>Network access requires HTTPS.</small>
+<small>Course prototype. Not a medical device.<br>Network access requires HTTPS.</small>
 </main></body></html>"""
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -244,6 +246,42 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_PATCH(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+        else:
+            self.send_error(405)
+
+    def do_DELETE(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+        else:
+            self.send_error(405)
+
+    def do_HEAD(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+        else:
+            self.send_error(405)
+
+    def do_OPTIONS(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+        else:
+            self.send_error(405)
+
+    def do_TRACE(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+        else:
+            self.send_error(405)
+
+    def do_PUT(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+        else:
+            self.send_error(405)
+
     def _read_json(self) -> dict:
         size = int(self.headers.get("Content-Length", "0"))
         if size <= 0 or size > 1_000_000:
@@ -264,6 +302,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+            return
         try:
             self._get()
         except (ValueError, KeyError, UnicodeError):
@@ -392,6 +433,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._file(candidate, cache=relative != "index.html")
 
     def do_POST(self) -> None:
+        if is_assistant(self.path):
+            handle_assistant(self)
+            return
         if not self._valid_host():
             return
         try:
@@ -582,7 +626,7 @@ def main() -> int:
     app.start()
     if lan_server:
         threading.Thread(target=lan_server.serve_forever, daemon=True).start()
-    print("Edge AI Monitor started. Open the configured public origin.", flush=True)
+    print("Nestory started. Open the configured public origin.", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     finally:

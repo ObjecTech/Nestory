@@ -1,0 +1,16 @@
+[Unit]
+Description=Nestory local Qwen model service (loopback only)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/nestory-releases/current/scripts/start-release.sh model
+# The model exits cleanly on SIGINT; never force-kill it while the GPU is busy.
+KillSignal=SIGINT
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

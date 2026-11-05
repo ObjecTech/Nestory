@@ -87,7 +87,7 @@ Git 仓库中的 `.env`、虚拟环境、权重、照片、数据库和缓存均
 公开仓库位于：`https://github.com/ObjecTech/Nestory`
 
 该仓库向公众开源，必须严格保证不泄露任何私有网络拓扑、账号密码、模型权重、运行数据库及私人媒体文件：
-1. **脱敏发布机制**：发布由辅助工程师（Gemini）独立负责，推送前必须运行 `python3 scripts/scan-release.py` 执行安全扫描。
+1. **脱敏发布机制**：发布由 Antigravity（原 Gemini 角色）负责，推送前必须运行 `python3 scripts/scan-release.py` 执行安全扫描。
 2. **独立发布历史**：GitHub 公开分支作为脱敏发布目标，其提交历史与 SHA 允许独立于内部开发仓库，发布时采用干净的脱敏工作树提交，严禁强制推送（`--force`）。
 3. **日常同步边界**：Mac 与 Jetson 内部日常开发仍严格使用 `bash scripts/sync-jetson.sh` 保持 SSH 裸仓库原子同步，不直接从开发环境自动推送到外部 GitHub。
 
@@ -97,3 +97,9 @@ Git 仓库中的 `.env`、虚拟环境、权重、照片、数据库和缓存均
 Jetson 工作副本。本节直接在 Jetson 编辑、提交并推送，用于验证 Mac
 能够拉回远程端产生的真实文件改动。另已验证：Jetson 存在未提交文件时，
 Mac 同步脚本会拒绝更新并保留该文件。该验证不涉及硬件或应用服务启动。
+
+## Jetson 部署
+
+代码同步不会重启服务。发布到 Jetson、开机自启和回退见 [DEPLOY.md](DEPLOY.md)。
+2026-10-15 的手工切换工具已移到 `maintenance/assistant-maintenance.py`，
+仅用于读取当时的恢复清单。

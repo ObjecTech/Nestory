@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
@@ -148,6 +149,12 @@ CATEGORY_ALIASES = {
     "钢琴曲": ("钢琴曲", "钢琴音乐", "钢琴", "轻音乐", "安静一点的音乐"),
 }
 
+# Short requests that name no category: resume if paused, else play the last category.
+GENERIC_PLAY_PHRASES = {
+    "播放", "开始播放", "放音乐", "播放音乐", "听音乐", "音乐", "放歌", "放首歌",
+    "来点音乐", "放点音乐", "我要听音乐", "想听音乐",
+}
+
 CATEGORY_FUZZY_PHRASES = {
     "古诗词": ("播放古诗词", "来点古诗", "背一首唐诗", "听古诗"),
     "经典儿歌": ("播放儿歌", "来点儿歌", "放首儿歌", "听儿歌", "播放童谣"),
@@ -200,6 +207,37 @@ def _phonetic_match(value: str, phrases: tuple[str, ...], threshold: float = 0.8
     return False
 
 
+# "佩奇，记一下宝宝喝了一百五十毫升奶" goes to the AI assistant as a care record.
+# A bare leading "一下" is "记一下" with the 记 clipped at the wake-word handoff.
+RECORD_PREFIX = re.compile(
+    r"^(?:请|麻烦)?(?:帮我|给我)?(?:(?:记录|记一下|记下|记个|记)(?:一下)?|一下)[，,、 ]*"
+)
+RECORD_WORDS = re.compile(r"喝了|喝完|吃了.{0,4}奶|喂奶|喂了|吃奶|母乳|奶粉|睡了|睡着|醒了|补觉|尿布|纸尿裤|尿不湿|散步|洗澡")
+_SPOKEN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _spoken_integer(value: str) -> int | None:
+    total, current = 0, 0
+    for char in value:
+        if char in _SPOKEN_DIGITS:
+            current = _SPOKEN_DIGITS[char]
+        elif char in "十百千":
+            total += (current or 1) * {"十": 10, "百": 100, "千": 1000}[char]
+            current = 0
+        else:
+            return None
+    return total + current
+
+
+def spoken_amounts_to_digits(text: str) -> str:
+    """Speech recognition writes "一百五十毫升"; record parsing expects "150毫升"."""
+    def replace(match: re.Match) -> str:
+        number = _spoken_integer(match.group(1))
+        return f"{number}{match.group(2)}" if number else match.group(0)
+    return re.sub(r"([零〇一二两三四五六七八九十百千]+)\s*(毫升|ml|ML)", replace, text)
+
+
 def _chinese_number(value: str) -> int | None:
     digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
               "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
@@ -218,7 +256,7 @@ def _chinese_number(value: str) -> int | None:
 def parse_voice_command(
     phrase: str,
     categories: list[str],
-    wake_word: str = "八戒",
+    wake_word: str = "佩奇",
     require_wake: bool = False,
 ) -> dict[str, Any]:
     text = _normalize_phrase(phrase)
@@ -314,6 +352,8 @@ def parse_voice_command(
     for canonical, phrases in CATEGORY_FUZZY_PHRASES.items():
         if canonical in available and _phonetic_match(text, phrases):
             return {"type": "category", "value": canonical}
+    if re.sub(r"[，,。.!！?？ ]", "", text) in GENERIC_PLAY_PHRASES:
+        return {"type": "play", "value": None}
     raise ValueError("未识别出可执行的音乐指令")
 
 
@@ -328,7 +368,7 @@ class VoiceControl:
         model_dir: Path,
         keywords_file: Path,
         audio_device: str,
-        wake_word: str = "八戒",
+        wake_word: str = "佩奇",
         wake_word_aliases: tuple[str, ...] | None = None,
         default_enabled: bool = False,
         asr_model_dir: Path | None = None,
@@ -340,8 +380,20 @@ class VoiceControl:
         on_event: Callable[[dict[str, Any]], None] | None = None,
         popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
         now_factory: Callable[[], datetime] | None = None,
+        cry_model_dir: Path | None = None,
+        cry_enabled: bool = False,
+        on_cry_score: Callable[[float], None] | None = None,
+        on_cry_stopped: Callable[[], None] | None = None,
+        on_record: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
+        self._on_record = on_record
         self.player = player
+        # Cry detection shares the microphone stream and runs around the clock,
+        # independent of the wake-word switch and its daily schedule.
+        self.cry_model_dir = cry_model_dir
+        self.cry_enabled = cry_enabled
+        self._on_cry_score = on_cry_score
+        self._on_cry_stopped = on_cry_stopped
         self.settings_path = settings_path
         self.worker_python = worker_python
         self.model_dir = model_dir
@@ -425,6 +477,25 @@ class VoiceControl:
     def _model_ready(self) -> bool:
         return self._kws_ready() and self._asr_ready()
 
+    def _cry_ready(self) -> bool:
+        return bool(
+            self.cry_model_dir
+            and (self.cry_model_dir / "model.int8.onnx").is_file()
+            and (self.cry_model_dir / "class_labels_indices.csv").is_file()
+        )
+
+    def _cry_active(self) -> bool:
+        return self.cry_enabled and self._cry_ready()
+
+    def _voice_active(self) -> bool:
+        with self._lock:
+            enabled = self._enabled
+        return enabled and self._schedule_active()
+
+    def _idle_voice_state(self) -> str:
+        with self._lock:
+            return "outside_schedule" if self._enabled else "disabled"
+
     def _schedule_active(self) -> bool:
         return is_within_listen_schedule(
             self._now_factory(),
@@ -472,7 +543,7 @@ class VoiceControl:
             self._microphone_ready = False
             self._error = None
             self._save_enabled()
-        if not enabled:
+        if not enabled and not self._cry_active():
             self._terminate_worker()
         self._wake.set()
         self._publish()
@@ -505,9 +576,47 @@ class VoiceControl:
                 "feedback_error": self._feedback_error,
                 "error": self._error,
                 "command_examples": list(COMMAND_EXAMPLES),
+                "cry_detection": {
+                    "enabled": self.cry_enabled,
+                    "ready": self._cry_ready(),
+                    "running": self._cry_active() and self._worker is not None and self._worker.poll() is None,
+                },
             }
 
+    def _record_text(self, phrase: str, require_prefix: bool) -> str | None:
+        if not self._on_record:
+            return None
+        text = phrase.strip()
+        for wake in sorted(self.wake_words, key=len, reverse=True):
+            if text.startswith(wake):
+                text = text[len(wake):]
+                break
+        text = text.strip(" ，,。.!！")
+        prefixed = RECORD_PREFIX.match(text)
+        if prefixed and text[prefixed.end():]:
+            return text[prefixed.end():]
+        if not require_prefix and RECORD_WORDS.search(text):
+            return text
+        return None
+
+    def _record(self, text: str) -> dict[str, Any]:
+        result = self._on_record(spoken_amounts_to_digits(text))
+        return {"intent": {"type": "record", "value": text}, "message": result["message"]}
+
     def execute_phrase(self, phrase: str, require_wake: bool = False) -> dict[str, Any]:
+        # "记一下…" always means a record; other sentences try music commands first.
+        record = self._record_text(phrase, require_prefix=True)
+        if record is not None:
+            return self._record(record)
+        try:
+            return self._execute_music(phrase, require_wake)
+        except ValueError:
+            record = self._record_text(phrase, require_prefix=False)
+            if record is None:
+                raise
+            return self._record(record)
+
+    def _execute_music(self, phrase: str, require_wake: bool) -> dict[str, Any]:
         player_status = self.player.status()
         categories = [item["name"] for item in player_status.get("categories", [])]
         intent = parse_voice_command(
@@ -528,6 +637,20 @@ class VoiceControl:
             labels = {"stop": "已停止播放", "pause": "已暂停", "resume": "继续播放",
                       "next": "播放下一首", "previous": "播放上一首"}
             message = labels[value]
+        elif kind == "play":
+            state = player_status.get("state")
+            if state == "paused":
+                result = self.player.control("resume")
+                message = "继续播放"
+            elif state in {"connecting", "playing"}:
+                result = player_status
+                message = "正在播放"
+            else:
+                category = player_status.get("category") or (categories[0] if categories else None)
+                if not category:
+                    raise RuntimeError("还没有可以播放的音乐")
+                result = self.player.play_category(category)
+                message = f"开始随机播放{category}"
         elif kind == "volume_delta":
             target = max(0, min(60, int(player_status.get("volume", 25)) + int(value)))
             result = self.player.set_volume(target)
@@ -567,13 +690,36 @@ class VoiceControl:
                 self._feedback_error = str(exc)
         self._publish()
 
+    @staticmethod
+    def _log(message: str) -> None:
+        # Diagnostics for wake-word tuning: event names and the transcribed
+        # command text only. No audio is written anywhere.
+        print(f"[voice] {message}", file=sys.stderr, flush=True)
+
     def _handle_event(self, event: dict[str, Any]) -> None:
-        if not self._schedule_active():
-            with self._lock:
-                self._microphone_ready = False
-            self._set_state("outside_schedule")
-            return
         event_type = str(event.get("type", ""))
+        if event_type in {"wake", "timeout", "microphone_error"}:
+            self._log(f"{event_type} {event.get('text') or event.get('error') or ''}".rstrip())
+        if event_type == "cry":
+            if self._on_cry_score:
+                try:
+                    self._on_cry_score(float(event.get("score", 0.0)))
+                except (TypeError, ValueError):
+                    pass
+            return
+        if not self._voice_active():
+            # The worker may keep running for cry detection; wake words and
+            # commands are ignored while voice control is off or out of hours.
+            idle = self._idle_voice_state()
+            with self._lock:
+                if event_type == "ready":
+                    self._microphone_ready = True
+                elif event_type == "microphone_error":
+                    self._microphone_ready = False
+                changed = self._state != idle
+            if changed:
+                self._set_state(idle)
+            return
         if event_type == "ready":
             with self._lock:
                 self._microphone_ready = True
@@ -595,12 +741,14 @@ class VoiceControl:
             phrase = str(event.get("text", ""))
             try:
                 result = self.execute_phrase(phrase)
+                self._log(f"command '{phrase}' -> {result['message']}")
                 with self._lock:
                     self._last_command = phrase
                     self._last_result = result["message"]
                     self._last_heard_at = time.time()
                 self._set_state("executed")
             except (RuntimeError, ValueError) as exc:
+                self._log(f"command '{phrase}' failed: {exc}")
                 with self._lock:
                     self._last_command = phrase
                     self._last_result = None
@@ -612,15 +760,12 @@ class VoiceControl:
         while not self._closing.is_set():
             with self._lock:
                 enabled = self._enabled
-            if not enabled:
-                self._wake.wait(2)
-                self._wake.clear()
-                continue
-            if not self._schedule_active():
-                with self._lock:
-                    self._microphone_ready = False
-                self._set_state("outside_schedule")
-                self._wake.wait(30)
+            if not self._voice_active() and not self._cry_active():
+                if enabled:
+                    with self._lock:
+                        self._microphone_ready = False
+                    self._set_state("outside_schedule")
+                self._wake.wait(30 if enabled else 2)
                 self._wake.clear()
                 continue
             if not self.worker_python.is_file() or not self._model_ready():
@@ -641,10 +786,11 @@ class VoiceControl:
                 enabled = self._enabled
             if previous is None or active != previous:
                 if enabled and not active:
-                    with self._lock:
-                        self._microphone_ready = False
                     self._set_state("outside_schedule")
-                    self._terminate_worker()
+                    if not self._cry_active():
+                        with self._lock:
+                            self._microphone_ready = False
+                        self._terminate_worker()
                     self._wake.set()
                 elif enabled and active:
                     self._set_state("starting")
@@ -672,6 +818,8 @@ class VoiceControl:
         ]
         for alias in self.wake_words[1:]:
             args.extend(("--wake-word-alias", alias))
+        if self._cry_active():
+            args.extend(("--tagging-model-dir", str(self.cry_model_dir)))
         try:
             process = self._popen_factory(
                 args,
@@ -715,6 +863,8 @@ class VoiceControl:
             with self._lock:
                 if self._worker is process:
                     self._worker = None
+            if self._on_cry_stopped:
+                self._on_cry_stopped()
 
     def _terminate_worker(self) -> None:
         with self._lock:

@@ -38,6 +38,14 @@ def _display_title(path: Path) -> str:
     return title or path.stem
 
 
+def parse_gst_duration(text: str) -> float:
+    match = re.search(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)", text)
+    if not match:
+        return 0.0
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
 @dataclass(frozen=True)
 class MediaTrack:
     category: str
@@ -62,6 +70,7 @@ class PlayWithMePlayer:
         default_volume: int = 25,
         playback_backend: str = "airplay",
         bluetooth_speaker_mac: str = "",
+        pulse_python: Path = Path("/usr/bin/python3"),
         start_converter: bool = True,
         popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
     ) -> None:
@@ -73,6 +82,7 @@ class PlayWithMePlayer:
         self.ffmpeg_path = ffmpeg_path
         self.playback_backend = playback_backend.strip().lower()
         self.bluetooth_speaker_mac = bluetooth_speaker_mac.strip()
+        self.pulse_python = pulse_python
         self.ffprobe_path = ffmpeg_path.with_name("ffprobe")
         self._popen_factory = popen_factory
         self._lock = threading.RLock()
@@ -259,6 +269,8 @@ class PlayWithMePlayer:
             duration = float(result.stdout.strip()) if result.returncode == 0 else 0.0
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
+        if duration <= 0 and path.suffix.lower() != ".wav":
+            duration = self._probe_duration_gstreamer(path)
         if duration <= 0 and path.suffix.lower() == ".wav":
             try:
                 with wave.open(str(path), "rb") as source:
@@ -269,6 +281,21 @@ class PlayWithMePlayer:
         if key is not None:
             self._duration_cache[key] = duration
         return duration
+
+    @staticmethod
+    def _probe_duration_gstreamer(path: Path) -> float:
+        """Fallback for devices without ffprobe (the Jetson has GStreamer only)."""
+        try:
+            result = subprocess.run(
+                ["gst-discoverer-1.0", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return 0.0
+        return parse_gst_duration(result.stdout)
 
     def _position_locked(self) -> float:
         position = self._position_offset
@@ -284,10 +311,17 @@ class PlayWithMePlayer:
 
     def _launch_locked(self, track: MediaTrack, start_seconds: float = 0.0) -> None:
         args = self._worker_args(track, start_seconds)
+        # The pulse worker runs under the system Python, so it imports this
+        # package from the code directory rather than from a virtualenv.
+        cwd = (
+            Path(__file__).resolve().parents[1]
+            if self.playback_backend == "pulse"
+            else self.player_python.parents[2]
+        )
         try:
             process = self._popen_factory(
                 args,
-                cwd=str(self.player_python.parents[2]),
+                cwd=str(cwd),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -320,6 +354,22 @@ class PlayWithMePlayer:
                 str(track.playback),
                 "--start-seconds",
                 str(max(0.0, start_seconds)),
+            ]
+        elif self.playback_backend == "pulse":
+            if not self.bluetooth_speaker_mac:
+                raise RuntimeError("还没有设置蓝牙音箱地址")
+            args = [
+                str(self.pulse_python),
+                "-m",
+                "baby_monitor.pulse_audio_worker",
+                "--file",
+                str(track.playback),
+                "--volume",
+                str(self._volume),
+                "--start-seconds",
+                str(max(0.0, start_seconds)),
+                "--bluetooth-mac",
+                self.bluetooth_speaker_mac,
             ]
         elif self.playback_backend == "pipewire":
             local_python = self.player_python.parents[2] / ".venv/bin/python"

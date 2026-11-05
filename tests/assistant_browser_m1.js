@@ -1,0 +1,100 @@
+async page => {
+  const check = (value, message) => {if (!value) throw new Error(message);};
+  const stamp = Date.now();
+  await page.evaluate(()=>window.__M1BrowserResult=null);
+  const results = [];
+  const statuses = [];
+  const fixtureDay=await page.evaluate(()=>{const now=new Date();const hour=Number(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Shanghai',hour:'numeric',hourCycle:'h23'}).format(now));const past=hour<12;const date=new Date(now.getTime()-(past?86400000:0));return {word:past?'昨天':'今天',day:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)};});
+  page.on('response', response => {if(response.url().includes('/api/assistant/')) statuses.push(response.status());});
+  const settle = async () => {
+    await page.waitForFunction(()=>!window.Assistant.state.isSending && window.Assistant.state.messages.some(m=>m.role==='user') && !window.Assistant.state.activePolls.has(window.Assistant.state.activeConversationId));
+  };
+  for (const [name,width,height] of [['desktop',1280,900],['phone',390,844]]) {
+    await page.setViewportSize({width,height});
+    await page.reload();
+    await page.locator('#assistantNavButton').click();
+    const previous = await page.evaluate(()=>window.Assistant.state.activeConversationId);
+    await page.locator('#assistantNewConvBtn').click();
+    await page.waitForFunction(old=>window.Assistant.state.activeConversationId && window.Assistant.state.activeConversationId!==old, previous);
+    const ca = await page.evaluate(()=>window.Assistant.state.activeConversationId);
+    await page.locator('#assistantRenameConvBtn').click();
+    await page.locator('#assistantRenameInput').fill(`M1 browser ${name} A ${stamp}`);
+    await page.locator('#assistantRenameSaveBtn').click();
+    await page.waitForFunction(title=>window.Assistant.state.activeConversation.title===title,`M1 browser ${name} A ${stamp}`);
+    await page.locator('#assistantInput').fill(`${fixtureDay.word}上午 11 点宝宝喝了 150ml 奶`);
+    await page.locator('#assistantSendBtn').click();
+    await settle();
+    check(await page.locator('.record-card.saved').count()===1,'Saved feeding card missing');
+    check((await page.locator('.record-card.saved').innerText()).includes('150 ml'),'Wrong milk quantity');
+    await page.locator('#assistantInput').fill('宝宝刚才喝了一些奶');
+    await page.locator('#assistantSendBtn').click(); await settle();
+    const pending=page.locator('.record-card.needs_confirmation');
+    await pending.getByRole('spinbutton',{name:'确认饮用奶量 (ml)'}).fill('130');
+    const day=fixtureDay.day;
+    await pending.getByLabel('确认发生时间').fill(day+'T11:05');
+    await pending.getByRole('button',{name:'确认保存',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('.record-card.saved').length===2);
+    const ownEvents=await page.evaluate(()=>window.Assistant.state.messages.filter(m=>m.role==='assistant').flatMap(m=>m.record_actions||[]).map(a=>a.event.id));
+    await page.waitForFunction(()=>document.getAnimations().every(a=>a.playState!=='running'));
+    await page.screenshot({path:`output/playwright/m1-${name}.png`,fullPage:true});
+    const sizing=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}));
+    check(sizing.scroll<=sizing.width,'Horizontal overflow at '+name+': '+JSON.stringify(sizing));
+    // Edit the actual event via the delivered form (event_type must not be PATCHed).
+    await page.locator('#assistantCareEventsBtn').click();
+    await page.locator('#careEventFromDate').fill(day);
+    await page.locator('#careEventToDate').fill(day);
+    await page.locator('#careEventToDate').press('Tab');
+    const items=page.locator('#careEventsList .care-event-item');
+    const ownItem=page.locator(`.care-event-item[data-event-id="${ownEvents[1]}"]`);
+    await ownItem.getByRole('button',{name:'✎ 编辑',exact:true}).click();
+    await page.locator('#editCareEventAmount').fill('135');
+    await page.locator('#saveCareEventBtn').click();
+    await page.waitForFunction(()=>!document.getElementById('editCareEventModal').classList.contains('active'));
+    await page.waitForFunction(id=>document.querySelector(`[data-event-id="${id}"]`).textContent.includes('135 ml'),ownEvents[1]);
+    check((await ownItem.innerText()).includes('135 ml'),'Care event edit did not persist');
+    await page.locator('#careEventsModalClose').click();
+    // History drawer and refresh restore selected conversation and cards.
+    await page.locator('#assistantDrawerBtn').click();
+    check(await page.locator('#assistantDrawer.active').isVisible(),'Drawer missing');
+    await page.locator('#assistantDrawerClose').click();
+    await page.reload(); await page.locator('#assistantNavButton').click();
+    await page.waitForFunction(()=>document.querySelectorAll('.record-card.saved').length===2);
+    check(await page.evaluate(()=>window.Assistant.state.activeConversationId)===ca,'Refresh lost current conversation');
+    await page.locator('#assistantNewConvBtn').click();
+    await page.waitForFunction(old=>window.Assistant.state.activeConversationId && window.Assistant.state.activeConversationId!==old, ca);
+    const cb=await page.evaluate(()=>window.Assistant.state.activeConversationId);
+    await page.locator('#assistantInput').fill(`查询${fixtureDay.word}喂奶记录`); await page.locator('#assistantSendBtn').click(); await settle();
+    check((await page.locator('#assistantMessagesArea').innerText()).includes('家长报告了'),'Cross-session feeding query missing');
+    await page.locator('#assistantDrawerBtn').click();
+    await page.locator(`.assistant-conv-item[data-conv-id="${ca}"]`).click();
+    await page.locator('#assistantDeleteConvBtn').click();
+    check(await page.getByRole('dialog',{name:'删除对话',exact:true}).isVisible(),'Delete confirmation missing');
+    await page.locator('#assistantDeleteConfirmBtn').click();
+    await page.waitForFunction(deleted=>!window.Assistant.state.conversations.some(c=>c.id===deleted),ca);
+    check(await page.evaluate(()=>window.Assistant.state.activeConversationId)!==ca,'Deleted conversation stayed active');
+    // The care archive still contains the saved feeding after conversation deletion.
+    await page.locator('#assistantCareEventsBtn').click();
+    await page.waitForFunction(()=>document.querySelectorAll('#careEventsList .care-event-item').length>=2);
+    check(await items.count()>=2,'Conversation deletion removed care events');
+    check(await ownItem.count()===1,'Saved event disappeared with conversation');
+    page.once('dialog', dialog=>dialog.accept());
+    await ownItem.getByRole('button',{name:'🗑 删除',exact:true}).click();
+    await page.waitForFunction(id=>!document.querySelector(`[data-event-id="${id}"]`),ownEvents[1]);
+    await page.locator('#careEventsModalClose').click();
+    // Browser disconnection: retain draft, show real failure, never switch to Mock.
+    await page.context().setOffline(true);
+    await page.locator('#assistantInput').fill('M1 browser offline check');
+    await page.locator('#assistantSendBtn').click();
+    await page.waitForFunction(()=>document.getElementById('toast').textContent.includes('连接失败'));
+    check(await page.locator('#assistantInput').inputValue()==='M1 browser offline check','Disconnect erased draft');
+    check(!await page.evaluate(()=>window.Assistant.state.isMock),'Disconnect silently enabled Mock');
+    await page.context().setOffline(false);
+    await page.locator('#assistantInput').fill('');
+    results.push({name,width,height,conversationA:ca,conversationB:cb,careEvents:ownEvents,checks:'navigation/create/send/confirm/edit/history/refresh/query/delete-conversation/delete-event/offline'});
+  }
+  check(statuses.includes(202),'No real HTTP 202 observed');
+  check(!await page.evaluate(()=>window.Assistant.state.isMock),'Unexpected frontend Mock');
+  const result={result:'PASSED',results,statuses:[...new Set(statuses)]};
+  await page.evaluate(value=>window.__M1BrowserResult=value,result);
+  return result;
+}

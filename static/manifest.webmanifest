@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Edge AI Monitor",
-  "short_name": "Edge Monitor",
-  "description": "研究平台的本地婴儿监控与状态记录",
+  "name": "Nestory",
+  "short_name": "Nestory",
+  "description": "本地 AI 婴幼儿陪伴：日常、陪我玩与 AI 助手",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",
